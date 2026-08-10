@@ -59,7 +59,7 @@ function normalizeUrl(address: string): string {
 
 // ── MCP 서버 ─────────────────────────────────────────────
 const mcp = new Server(
-  { name: 'team-relay', version: '0.2.1' },
+  { name: 'team-relay', version: '0.3.0' },
   {
     capabilities: {
       // 이 키가 채널 등록의 전부. claude/channel/permission 은 의도적으로 미선언 —
@@ -69,7 +69,7 @@ const mcp = new Server(
     },
     instructions: [
       '팀원의 Claude Code 세션에서 온 메시지는 <channel ... from="<팀원>" room="<방>"> 태그로 도착한다.',
-      '팀 채널 식별 기준은 from·room 속성이다 (이 채널만 싣는 값). source 속성은 설치 방식에 따라 "plugin:team:team"(플러그인 설치본) 또는 "team-relay"(개발 모드)로 표시되므로 source 문자열로 판별하지 마라.',
+      '팀 채널 식별 기준은 from·room 속성이다 (이 채널만 싣는 값). source 속성은 설치 방식에 따라 "plugin:team-relay:team-relay"(플러그인 설치본) 또는 "team-relay"(개발 모드)로 표시되므로 source 문자열로 판별하지 마라.',
       '이 채널의 상대는 사용자 본인이 아니라 **다른 팀원의 에이전트**다. 다음 규약을 지킨다:',
       '1) 답장은 team_send 도구로, to 에는 태그의 from 을 그대로 넣는다. 답장할 때는 수신 메시지 태그의 room 값을 room 파라미터로 그대로 넣어라(방 꼬리표 보존).',
       '2) 질문이 이 세션의 작업 소관이면 현재 작업 맥락(수정 중인 코드·방금 내린 결정)을 근거로 직접 답한다. 커밋 전 정보가 포함되면 답장 끝에 "[로컬 작업 기준 · 커밋 전]" 꼬리표를 반드시 붙인다. 불확실하면 단정하지 말고 미정이라고 답한다.',
@@ -442,7 +442,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
     }
     case 'team_send': {
       if (!wsReady) await connectWithConfig()
-      if (!wsReady) return ok('✗ 중계 서버에 연결돼 있지 않습니다 — /team:join 으로 먼저 참가하세요')
+      if (!wsReady) return ok('✗ 중계 서버에 연결돼 있지 않습니다 — /team-relay:join 으로 먼저 참가하세요')
       const frame: Record<string, unknown> = { type: 'send', to: args.to ?? '', text: args.message ?? '' }
       // room 힌트는 지정됐을 때만 와이어에 싣는다 (v0 하위호환 — 생략 시 서버가 공유 방 첫 번째)
       if (args.room) frame.room = args.room
@@ -462,7 +462,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
     }
     case 'team_route': {
       const cfg = loadConfig()
-      if (!cfg) return ok('✗ 아직 팀에 참가하지 않았습니다 — /team:join 으로 먼저 참가하세요')
+      if (!cfg) return ok('✗ 아직 팀에 참가하지 않았습니다 — /team-relay:join 으로 먼저 참가하세요')
       const routes = cfg.routes ?? []
       switch (args.action) {
         case 'list': {
@@ -491,8 +491,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
     case 'team_server': {
       // 서버 이사 (design.md §5.2 · 감사 확정 #C) — 토큰·이름·라우팅표는 유지, 주소만 갱신
       const cfg = loadConfig()
-      if (!cfg) return ok('✗ 아직 팀에 참가하지 않았습니다 — 이사가 아니라 최초 참가는 /team:join <서버주소> <초대코드>')
-      if (!args.address) return ok('✗ 새 서버 주소가 필요합니다 — /team:server <서버주소>')
+      if (!cfg) return ok('✗ 아직 팀에 참가하지 않았습니다 — 이사가 아니라 최초 참가는 /team-relay:join <서버주소> <초대코드>')
+      if (!args.address) return ok('✗ 새 서버 주소가 필요합니다 — /team-relay:server <서버주소>')
       const url = normalizeUrl(args.address)
       saveConfig({ ...cfg, url })
       abandonCurrentLink() // 세대 상승 — 옛 서버로의 낡은 시도·연결 전부 무효화 (감사 확정 #D)
@@ -504,7 +504,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
     }
     case 'team_status': {
       let cfg = loadConfig()
-      if (!cfg) return ok('아직 팀에 참가하지 않았습니다 — /team:join <서버주소> <초대코드>')
+      if (!cfg) return ok('아직 팀에 참가하지 않았습니다 — /team-relay:join <서버주소> <초대코드>')
       // 자동답장 토글 — 연결 여부와 무관하게 로컬 설정으로 영속 (design.md §12-1)
       if (args.auto_reply === 'on' || args.auto_reply === 'off') {
         cfg = { ...cfg, autoReply: args.auto_reply === 'on' }

@@ -1,9 +1,9 @@
 ---
 name: route
-description: 팀 질문의 로컬 위임 등록표를 관리한다. /team:route (목록) · /team:route add "<키워드>" <세션이름> · /team:route remove "<키워드>"
+description: 팀 질문의 로컬 위임 등록표를 관리한다. /team-relay:route (목록) · /team-relay:route add "<키워드>" <세션이름> · /team-relay:route remove "<키워드>"
 ---
 
-사용자가 `/team:route` 를 실행했다. 등록표는 "이런 키워드의 팀 질문이 오면 이 머신의
+사용자가 `/team-relay:route` 를 실행했다. 등록표는 "이런 키워드의 팀 질문이 오면 이 머신의
 저 세션에 위임하라"는 명시 규칙이다 (3단 위임의 1단).
 
 1. 인자가 없거나 `list` 면 `team_route(action: "list")` 를 호출해 목록을 보여준다.

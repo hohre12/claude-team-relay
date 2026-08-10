@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "team": {
+      "command": "bun",
+      "args": ["run", "--cwd", "${CLAUDE_PLUGIN_ROOT}/plugin", "--shell=bun", "--silent", "start"]
+    }
+  }
+}

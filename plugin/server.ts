@@ -89,6 +89,17 @@ let ws: WebSocket | null = null
 let wsReady = false
 let reconnectDelay = 1000
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+/**
+ * 진행 중인 연결 시도의 공유 Promise — 재접속 타이머와 도구 호출이 겹쳐도 소켓은 하나만
+ * 열리고(경합 방지), 뒤에 온 호출자는 같은 시도를 기다린다(즉시 null 이탈 방지).
+ */
+let connectPromise: Promise<RelayFrame | null> | null = null
+/** 진행 중 시도의 종결자 — 연결 실패(close)가 5초 fallback 을 기다리지 않고 즉시 정리하도록 */
+let finishConnect: ((v: RelayFrame | null) => void) | null = null
+/** 의도적으로 닫는 소켓 — close 리스너가 재접속을 걸지 않아야 하는 것들 (join 교체·취소) */
+const deliberateClose = new WeakSet<WebSocket>()
+/** join 연결 타임아웃 — 테스트에서 줄일 수 있게 env 로 노출 */
+const JOIN_TIMEOUT_MS = Number(process.env.TEAM_RELAY_JOIN_TIMEOUT_MS ?? 5000)
 
 /**
  * v0 프로토콜에는 요청 id 가 없다 → 요청을 직렬화하고, in-flight 중 도착하는
@@ -164,9 +175,16 @@ function openSocket(url: string, onOpen: (sock: WebSocket) => void): WebSocket {
     }
   })
   sock.addEventListener('close', () => {
+    // 진행 중이던 연결 시도를 즉시 종결 — 안 하면 다음 재시도가 죽은 Promise 를 기다린다
+    finishConnect?.(null)
+    if (deliberateClose.has(sock)) return
     if (ws === sock) {
       ws = null
       wsReady = false
+      scheduleReconnect()
+    } else if (ws === null) {
+      // 연결 수립 전에 실패한 소켓(onOpen 미발화 → ws 미할당) — 여기서 재시도를 걸지 않으면
+      // 서버 다운타임이 첫 백오프보다 긴 순간 재접속 사슬이 영구 정지한다 (리뷰 확정 #2)
       scheduleReconnect()
     }
   })
@@ -190,24 +208,36 @@ async function connectWithConfig(): Promise<RelayFrame | null> {
   const cfg = loadConfig()
   if (!cfg) return null
   if (ws && wsReady) return null
-  return new Promise(resolve => {
-    const sock = openSocket(cfg.url, s => {
+  if (connectPromise) return connectPromise // 진행 중인 시도에 합류 (경합·즉시이탈 둘 다 방지)
+  connectPromise = new Promise(resolve => {
+    let settled = false
+    const finish = (v: RelayFrame | null): void => {
+      if (settled) return
+      settled = true
+      connectPromise = null
+      finishConnect = null
+      clearTimeout(fallback)
+      resolve(v)
+    }
+    finishConnect = finish
+    // 실패 경로: openSocket 의 close 리스너가 finishConnect 로 즉시 종결하고 재접속을 스케줄한다.
+    // 이 fallback 은 그마저 안 올 때의 안전망 — 잔존 타이머는 finish 가 정리한다 (리뷰 사소 #1)
+    const fallback = setTimeout(() => finish(null), 5000)
+    openSocket(cfg.url, s => {
       ws = s
       void request({ type: 'hello', token: cfg.token }).then(frame => {
         if (frame.type === 'welcome') {
           wsReady = true
           reconnectDelay = 1000
           log(`'${cfg.name}' 으로 접속 완료 (${cfg.url})`)
-          resolve(frame)
         } else {
           log(`인증 실패: ${frame.reason ?? frame.type}`)
-          resolve(frame)
         }
+        finish(frame)
       })
     })
-    // openSocket 의 close 리스너가 재접속을 스케줄한다
-    setTimeout(() => resolve(null), 5000)
   })
+  return connectPromise
 }
 
 /** 직렬화된 요청 — 응답(첫 비 push 프레임) 또는 타임아웃 */
@@ -303,16 +333,33 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
     case 'team_join': {
       const url = normalizeUrl(args.address ?? '')
       const existing = loadConfig()
-      // 기존 연결이 있으면 정리하고 새 주소로
+      // 기존 연결이 있으면 정리하고 새 주소로 — 의도적 종료라 재접속을 걸지 않는다
       if (ws) {
         const old = ws
         ws = null
         wsReady = false
+        deliberateClose.add(old)
         old.close()
       }
       const joined = await new Promise<RelayFrame>((resolve, reject) => {
-        const t = setTimeout(() => reject(new Error(`중계 서버(${url})에 연결할 수 없습니다`)), 5000)
-        openSocket(url, s => {
+        // 타임아웃 후 늦게 열린 유령 소켓이 join 을 보내면 일회용 초대코드가 소모되고
+        // 발급 토큰은 아무도 저장하지 않는다 — 취소 표식으로 발신 자체를 막는다 (리뷰 확정 #4)
+        let cancelled = false
+        let joinSock: WebSocket | null = null
+        const t = setTimeout(() => {
+          cancelled = true
+          if (joinSock) {
+            deliberateClose.add(joinSock)
+            joinSock.close()
+          }
+          reject(new Error(`중계 서버(${url})에 연결할 수 없습니다`))
+        }, JOIN_TIMEOUT_MS)
+        joinSock = openSocket(url, s => {
+          if (cancelled) {
+            deliberateClose.add(s)
+            s.close()
+            return
+          }
           clearTimeout(t)
           ws = s
           void request({ type: 'join', code: args.code ?? '', token: existing?.token }).then(resolve, reject)

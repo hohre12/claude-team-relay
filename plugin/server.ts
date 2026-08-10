@@ -59,7 +59,7 @@ function normalizeUrl(address: string): string {
 
 // ── MCP 서버 ─────────────────────────────────────────────
 const mcp = new Server(
-  { name: 'team-relay', version: '0.2.0' },
+  { name: 'team-relay', version: '0.2.1' },
   {
     capabilities: {
       // 이 키가 채널 등록의 전부. claude/channel/permission 은 의도적으로 미선언 —
@@ -68,7 +68,8 @@ const mcp = new Server(
       tools: {},
     },
     instructions: [
-      '팀원의 Claude Code 세션에서 온 메시지가 <channel source="team-relay" from="<팀원>" room="<방>"> 으로 도착한다.',
+      '팀원의 Claude Code 세션에서 온 메시지는 <channel ... from="<팀원>" room="<방>"> 태그로 도착한다.',
+      '팀 채널 식별 기준은 from·room 속성이다 (이 채널만 싣는 값). source 속성은 설치 방식에 따라 "plugin:team:team"(플러그인 설치본) 또는 "team-relay"(개발 모드)로 표시되므로 source 문자열로 판별하지 마라.',
       '이 채널의 상대는 사용자 본인이 아니라 **다른 팀원의 에이전트**다. 다음 규약을 지킨다:',
       '1) 답장은 team_send 도구로, to 에는 태그의 from 을 그대로 넣는다. 답장할 때는 수신 메시지 태그의 room 값을 room 파라미터로 그대로 넣어라(방 꼬리표 보존).',
       '2) 질문이 이 세션의 작업 소관이면 현재 작업 맥락(수정 중인 코드·방금 내린 결정)을 근거로 직접 답한다. 커밋 전 정보가 포함되면 답장 끝에 "[로컬 작업 기준 · 커밋 전]" 꼬리표를 반드시 붙인다. 불확실하면 단정하지 말고 미정이라고 답한다.',
@@ -100,6 +101,21 @@ let finishConnect: ((v: RelayFrame | null) => void) | null = null
 const deliberateClose = new WeakSet<WebSocket>()
 /** join 연결 타임아웃 — 테스트에서 줄일 수 있게 env 로 노출 */
 const JOIN_TIMEOUT_MS = Number(process.env.TEAM_RELAY_JOIN_TIMEOUT_MS ?? 5000)
+/**
+ * 게이트웨이(수신) 선언 — claude-team alias 가 심는 표식 (감사 확정 #A).
+ * Claude Code 는 이 세션에 채널이 등록됐는지를 플러그인에 알려주지 않으므로(바이너리
+ * env 전수 실측으로 신호 부재 확인) 사용자가 alias 로 선언한다. 미선언 세션은:
+ *  - 자동 접속하지 않고 (게이트웨이 탈취 방지)
+ *  - 도구 호출 시 gateway=false 로 접속 — 발신은 되지만 배달 대상이 되지 않는다.
+ */
+const IS_GATEWAY = process.env.TEAM_RELAY_GATEWAY === '1'
+/**
+ * 연결 세대 — join/서버변경이 세대를 올리면, 그 이전에 시작된 연결 시도는 늦게
+ * 성공해도 채택되지 않는다 (감사 확정 #D: 낡은 시도의 늦은 open 이 ws 를 덮어쓰는 문제).
+ */
+let connectEpoch = 0
+/** 진행 중 연결 시도의 소켓 — join/서버변경이 즉시 취소할 수 있도록 추적 */
+let connectingSock: WebSocket | null = null
 
 /**
  * v0 프로토콜에는 요청 id 가 없다 → 요청을 직렬화하고, in-flight 중 도착하는
@@ -209,6 +225,7 @@ async function connectWithConfig(): Promise<RelayFrame | null> {
   if (!cfg) return null
   if (ws && wsReady) return null
   if (connectPromise) return connectPromise // 진행 중인 시도에 합류 (경합·즉시이탈 둘 다 방지)
+  const epoch = connectEpoch
   connectPromise = new Promise(resolve => {
     let settled = false
     const finish = (v: RelayFrame | null): void => {
@@ -223,9 +240,17 @@ async function connectWithConfig(): Promise<RelayFrame | null> {
     // 실패 경로: openSocket 의 close 리스너가 finishConnect 로 즉시 종결하고 재접속을 스케줄한다.
     // 이 fallback 은 그마저 안 올 때의 안전망 — 잔존 타이머는 finish 가 정리한다 (리뷰 사소 #1)
     const fallback = setTimeout(() => finish(null), 5000)
-    openSocket(cfg.url, s => {
+    connectingSock = openSocket(cfg.url, s => {
+      if (connectingSock === s) connectingSock = null
+      // 구세대 시도(그 사이 join/서버변경 발생) 또는 이미 종결된 시도 — 채택 금지 (감사 확정 #D)
+      if (epoch !== connectEpoch || settled) {
+        deliberateClose.add(s)
+        s.close()
+        finish(null)
+        return
+      }
       ws = s
-      void request({ type: 'hello', token: cfg.token }).then(frame => {
+      void request({ type: 'hello', token: cfg.token, gateway: IS_GATEWAY }).then(frame => {
         if (frame.type === 'welcome') {
           wsReady = true
           reconnectDelay = 1000
@@ -258,6 +283,40 @@ function request(obj: Record<string, unknown>): Promise<RelayFrame> {
   const next = requestChain.then(run, run)
   requestChain = next.catch(() => {})
   return next
+}
+
+/**
+ * 현재 링크·진행 중 시도를 전부 폐기하고 세대를 올린다 — join/서버변경의 선행 절차.
+ * 이후 낡은 시도가 늦게 성공해도 connectWithConfig 의 세대 가드가 버린다 (감사 확정 #D).
+ */
+function abandonCurrentLink(): void {
+  connectEpoch += 1
+  // 폐기된 링크로 나가 있던 in-flight 요청을 즉시 종결 — 안 하면 그 요청의 5초 타임아웃까지
+  // 직렬 요청 체인이 통째로 막힌다 (head-of-line blocking)
+  if (inFlight) {
+    const p = inFlight
+    inFlight = null
+    clearTimeout(p.timer)
+    p.resolve({ type: 'error', reason: 'link_abandoned' })
+  }
+  finishConnect?.(null)
+  if (connectingSock) {
+    deliberateClose.add(connectingSock)
+    connectingSock.close()
+    connectingSock = null
+  }
+  if (ws) {
+    const old = ws
+    ws = null
+    wsReady = false
+    deliberateClose.add(old)
+    old.close()
+  }
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
+  reconnectDelay = 1000
 }
 
 // ── 도구 ─────────────────────────────────────────────────
@@ -310,6 +369,18 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'team_server',
+      description:
+        '중계 서버 주소를 변경한다 (서버 이사 — 초대코드 불필요, 기존 토큰 유지). 이사한 서버는 명부 데이터를 그대로 가져가므로 재참가가 아니라 주소 갱신이다.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          address: { type: 'string', description: '새 중계 서버 주소 (예: 10.0.2.50:8765)' },
+        },
+        required: ['address'],
+      },
+    },
+    {
       name: 'team_status',
       description:
         '팀 연결 상태 — 내 이름·소속 방·방별 온라인/오프라인 팀원·자동답장 토글. auto_reply 파라미터로 자동답장을 전환할 수 있다.',
@@ -333,37 +404,29 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
     case 'team_join': {
       const url = normalizeUrl(args.address ?? '')
       const existing = loadConfig()
-      // 기존 연결이 있으면 정리하고 새 주소로 — 의도적 종료라 재접속을 걸지 않는다
-      if (ws) {
-        const old = ws
-        ws = null
-        wsReady = false
-        deliberateClose.add(old)
-        old.close()
-      }
+      // 기존 링크·진행 중 시도 전부 폐기 + 세대 상승 — 낡은 시도의 늦은 성공을 무효화 (감사 확정 #D)
+      abandonCurrentLink()
       const joined = await new Promise<RelayFrame>((resolve, reject) => {
         // 타임아웃 후 늦게 열린 유령 소켓이 join 을 보내면 일회용 초대코드가 소모되고
         // 발급 토큰은 아무도 저장하지 않는다 — 취소 표식으로 발신 자체를 막는다 (리뷰 확정 #4)
         let cancelled = false
-        let joinSock: WebSocket | null = null
         const t = setTimeout(() => {
           cancelled = true
-          if (joinSock) {
-            deliberateClose.add(joinSock)
-            joinSock.close()
-          }
+          joinSock.close() // 생성 직후 deliberateClose 등록됨 — 재접속 안 걸림
           reject(new Error(`중계 서버(${url})에 연결할 수 없습니다`))
         }, JOIN_TIMEOUT_MS)
-        joinSock = openSocket(url, s => {
+        const joinSock = openSocket(url, s => {
           if (cancelled) {
-            deliberateClose.add(s)
             s.close()
             return
           }
           clearTimeout(t)
+          deliberateClose.delete(s) // 채택 — 이후 이 소켓의 close 는 정상 재접속 대상
           ws = s
           void request({ type: 'join', code: args.code ?? '', token: existing?.token }).then(resolve, reject)
         })
+        // 조기 실패(연결 거부)가 옛 설정으로의 재접속을 걸지 않도록 선등록 (감사 사소 — 채택 시 해제)
+        deliberateClose.add(joinSock)
       })
       if (joined.type !== 'joined') {
         return ok(`✗ 참가 실패: ${joined.reason ?? joined.type}`)
@@ -372,7 +435,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       if (!token) return ok('✗ 서버가 토큰을 주지 않았고 기존 토큰도 없습니다 — 관리자에게 문의')
       // 라우팅 등록표·자동답장 토글 등 로컬 설정은 재참가해도 보존한다
       saveConfig({ ...(existing ?? {}), url, token, name: String(joined.name) })
-      const welcome = await request({ type: 'hello', token })
+      const welcome = await request({ type: 'hello', token, gateway: IS_GATEWAY })
       if (welcome.type === 'welcome') wsReady = true
       const rooms = (joined.rooms as string[]).join(', ')
       return ok(`✓ '${joined.name}' 으로 참가 완료 — 소속 방: ${rooms}\n${formatRoster(welcome)}\n이후 세션부터는 자동 접속됩니다.`)
@@ -425,6 +488,20 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
           return ok(`✗ 알 수 없는 action: ${args.action ?? '(없음)'} — list|add|remove 중 하나`)
       }
     }
+    case 'team_server': {
+      // 서버 이사 (design.md §5.2 · 감사 확정 #C) — 토큰·이름·라우팅표는 유지, 주소만 갱신
+      const cfg = loadConfig()
+      if (!cfg) return ok('✗ 아직 팀에 참가하지 않았습니다 — 이사가 아니라 최초 참가는 /team:join <서버주소> <초대코드>')
+      if (!args.address) return ok('✗ 새 서버 주소가 필요합니다 — /team:server <서버주소>')
+      const url = normalizeUrl(args.address)
+      saveConfig({ ...cfg, url })
+      abandonCurrentLink() // 세대 상승 — 옛 서버로의 낡은 시도·연결 전부 무효화 (감사 확정 #D)
+      const welcome = await connectWithConfig()
+      if (welcome?.type === 'welcome') {
+        return ok(`✓ 중계 서버를 ${url} 로 변경 — '${cfg.name}' 으로 접속 완료 (기존 토큰 유지)\n${formatRoster(welcome)}`)
+      }
+      return ok(`서버 주소를 ${url} 로 저장했습니다 — 지금은 연결되지 않아 백그라운드에서 자동 재시도합니다 (기존 토큰 유지)`)
+    }
     case 'team_status': {
       let cfg = loadConfig()
       if (!cfg) return ok('아직 팀에 참가하지 않았습니다 — /team:join <서버주소> <초대코드>')
@@ -436,10 +513,12 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         return ok(`✗ auto_reply 값은 "on" 또는 "off" 만 허용됩니다: ${args.auto_reply}`)
       }
       const autoLine = `자동답장: ${(cfg.autoReply ?? true) ? '켜짐 (규약 내 자동 발신)' : '꺼짐 (발신 전 사용자 승인 필요)'}`
+      // 게이트웨이 여부는 항상 겉으로 — 선언(alias) 기반이라 조용히 어긋나면 안 된다 (감사 확정 #A)
+      const gwLine = `수신(게이트웨이): ${IS_GATEWAY ? '예' : '아니요 — 이 세션은 발신 전용. 팀 메시지 수신은 claude-team 으로 켠 세션에서'}`
       if (!wsReady) await connectWithConfig()
-      if (!wsReady) return ok(`✗ 중계 서버(${cfg.url}) 오프라인 — 내 이름: ${cfg.name}\n${autoLine}`)
+      if (!wsReady) return ok(`✗ 중계 서버(${cfg.url}) 오프라인 — 내 이름: ${cfg.name}\n${gwLine}\n${autoLine}`)
       const st = await request({ type: 'status' })
-      return ok(`내 이름: ${st.name} · 연결됨 (${cfg.url})\n${autoLine}\n${formatRoster(st)}`)
+      return ok(`내 이름: ${st.name} · 연결됨 (${cfg.url})\n${gwLine}\n${autoLine}\n${formatRoster(st)}`)
     }
     default:
       throw new Error(`unknown tool: ${req.params.name}`)
@@ -459,5 +538,6 @@ function formatRoster(frame: RelayFrame): string {
 
 // ── 기동 ─────────────────────────────────────────────────
 await mcp.connect(new StdioServerTransport())
-// 설정이 있으면 자동 접속 (없으면 team_join 을 기다린다)
-if (loadConfig()) void connectWithConfig()
+// 게이트웨이로 선언된 세션만 자동 접속 (감사 확정 #A — 일반 세션의 접속은 게이트웨이를
+// 탈취해 메시지 블랙홀을 만든다). 일반 세션은 도구 호출 시 gateway=false 로만 접속.
+if (IS_GATEWAY && loadConfig()) void connectWithConfig()

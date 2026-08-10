@@ -11,7 +11,7 @@
 
 ## 팀원 설치 (최초 1회, 약 2분)
 
-사전 요구: macOS/Linux · Claude Code v2.1.224+ · [Bun](https://bun.sh) (`bun --version` 안 되면 설치) · 이 저장소 읽기 권한(관리자가 GitHub collaborator 로 초대).
+사전 요구: macOS/Linux · Claude Code v2.1.224+ · [Bun](https://bun.sh) (`bun --version` 안 되면 설치; 첫 기동 시 의존성 자동 설치를 위해 인터넷 필요) · 이 저장소 읽기 권한(관리자가 GitHub collaborator 로 초대).
 
 ```text
 # Claude Code 안에서:
@@ -23,7 +23,7 @@
 셸 프로필에 alias 를 넣어두면 평소처럼 쓴다:
 
 ```bash
-alias claude-team='claude --dangerously-load-development-channels plugin:team@jwbae-plugins'
+alias claude-team='TEAM_RELAY_GATEWAY=1 claude --dangerously-load-development-channels plugin:team@jwbae-plugins'
 ```
 
 첫 기동 시: 개발 채널 경고 → "I am using this for local development" 선택, 새 MCP 서버
@@ -33,8 +33,11 @@ alias claude-team='claude --dangerously-load-development-channels plugin:team@jw
 /team:join <서버주소:포트> <초대코드>
 ```
 
-끝. 이후 `claude-team` 으로 켠 세션은 자동 접속된다. **채널을 붙인 세션 = 게이트웨이** —
+끝. 이후 `claude-team` 으로 켠 세션은 자동 접속된다. **`claude-team` 으로 켠 세션 = 게이트웨이(수신)** —
 주력 작업 세션에 붙이는 것을 권장(자기 소관 질문에 작업 맥락으로 바로 답하므로 답 품질 최고).
+평범하게 `claude` 로 켠 세션은 팀 메시지를 받지 않으며(게이트웨이를 빼앗지 않음), 그 세션에서도
+"○○에게 보내줘"는 가능하다(발신 전용). alias 의 `TEAM_RELAY_GATEWAY=1` 이 이 구분의 스위치이므로
+**alias 없이 플래그만 직접 쳐서 켜면 수신이 안 된다** — `/team:status` 의 "수신(게이트웨이)" 항목으로 확인.
 
 ## 사용법
 
@@ -62,7 +65,7 @@ bun relay/cli.ts list                            # 방·팀원·온라인·대�
 bun relay/cli.ts revoke minseo                   # 즉시 차단
 ```
 
-- 서버 이사: `relay/data/` 를 새 머신에 복사 후 기동 → 팀원은 `/team:join` 의 서버 주소만 갱신.
+- 서버 이사: `relay/data/` 를 새 머신에 복사 후 기동 → 팀원은 `/team:server <새주소>` 한 줄 (초대코드 불필요 — 기존 토큰이 이사한 명부에서 그대로 유효).
 - 맥북 상시 운영 시: 전원 연결 + 잠자기 방지, 방화벽에서 포트 허용, IP 고정 예약 권장.
 
 ## 트러블슈팅
@@ -70,7 +73,7 @@ bun relay/cli.ts revoke minseo                   # 즉시 차단
 - **`/team:join` 이 없는 명령** → 플러그인 미설치이거나 `--dangerously-load-development-channels plugin:team@jwbae-plugins` 없이 기동함.
 - **기동 배너에 "blocked by org policy"** → 조직 관리자가 채널을 켜야 함 (claude.ai Admin settings → Claude Code → Channels).
 - **메시지가 안 옴** → `/team:status` 로 연결 확인 → 서버가 죽었으면 재기동(플러그인이 자동 재접속) → `/mcp` 로 채널 서버 상태, stderr 는 `~/.claude/debug/<session-id>.txt`.
-- 개발·검증: `bun test` (48개) · 로컬 2세션 데모: `bash scripts/e2e-demo.sh`
+- 개발·검증: `bun test` (54개) · 로컬 2세션 데모: `bash scripts/e2e-demo.sh`
 
 ---
 개인 프로젝트 — Jwbae \<hohre12@gmail.com\>

@@ -7,7 +7,7 @@
 - 전송로: 자체 채널 플러그인(공식 [channels](https://code.claude.com/docs/en/channels) 확장면) + 사내 중계 서버 (대화가 사내망 밖으로 안 나감)
 - 머신 안 위임: Claude Code 2.1.224 네이티브 크로스 세션 메시징
 - 격리: 방(room) 단위 — 같은 방이 없는 팀원은 서로 보이지도 않음
-- 설계·근거: [docs/design.md](docs/design.md) · 프로토콜: [docs/channel-protocol.md](docs/channel-protocol.md)
+- 설계·근거: [docs/design.md](docs/design.md) · 프로토콜: [docs/channel-protocol.md](docs/channel-protocol.md) · **관리자 런북: [docs/admin-guide.md](docs/admin-guide.md)**
 
 ## 팀원 설치 (최초 1회, 약 2분)
 

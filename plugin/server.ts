@@ -59,7 +59,7 @@ function normalizeUrl(address: string): string {
 
 // ── MCP 서버 ─────────────────────────────────────────────
 const mcp = new Server(
-  { name: 'team-relay', version: '0.3.2' },
+  { name: 'team-relay', version: '0.4.0' },
   {
     capabilities: {
       // 이 키가 채널 등록의 전부. claude/channel/permission 은 의도적으로 미선언 —
@@ -145,6 +145,21 @@ async function deliverToSession(frame: RelayFrame): Promise<void> {
 }
 
 /**
+ * 게이트웨이 상실 통지 — 다른 세션이 게이트웨이를 차지했거나(replaced) 관리자가 차단(revoke)해
+ * 이 세션이 팀 수신을 잃었음을 사용자에게 알린다. 자동 재접속은 하지 않는다(핑퐁 방지).
+ */
+async function notifyGatewayLost(reason: string): Promise<void> {
+  const text =
+    reason === 'revoked'
+      ? '[팀 연결 종료] 관리자가 이 계정의 접속을 차단했습니다. 팀 메시지 수신·발신이 중단됩니다.'
+      : '[팀 수신 이전] 다른 claude-team 세션이 팀 수신(게이트웨이)을 가져갔습니다. 이 세션은 더 이상 팀 메시지를 받지 않습니다. 이 세션에서 다시 받으려면 /team-relay:status 를 실행하세요(그러면 다른 세션이 수신을 잃습니다). 세션은 하나만 게이트웨이로 두는 것을 권장합니다.'
+  await mcp.notification({
+    method: 'notifications/claude/channel',
+    params: { content: text, meta: { kind: 'system' } },
+  })
+}
+
+/**
  * 보관 만료 통지 렌더 — 큐 TTL 을 넘겨 폐기된 발신을 발신자 세션에 알린다.
  * 조용한 증발 금지 (design.md §12-2). meta 키는 식별자만 허용 — 하이픈 금지.
  */
@@ -167,6 +182,18 @@ function handleFrame(frame: RelayFrame): void {
   // expired 는 서버가 임의 시점에 쏘는 push — in-flight 응답으로 오소비하면 안 된다
   if (frame.type === 'expired') {
     void deliverExpired(frame)
+    return
+  }
+  // 서버가 이 연결을 의도적으로 밀어냄(다른 세션이 게이트웨이 차지)·차단(revoke) —
+  // 재접속하면 두 세션이 게이트웨이를 뺏는 무한 핑퐁이 된다. 소켓을 포기하고 사용자에게 알린다.
+  // 사용자가 이 세션에서 다시 수신하려면 명시적으로 /team-relay:status 를 치면 재접속된다(그건 의도된 선택).
+  if (frame.type === 'error' && (frame.reason === 'replaced_by_new_gateway' || frame.reason === 'revoked')) {
+    if (ws) {
+      deliberateClose.add(ws) // close 리스너가 재접속을 걸지 않게
+      wsReady = false
+    }
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+    void notifyGatewayLost(String(frame.reason))
     return
   }
   if (inFlight) {

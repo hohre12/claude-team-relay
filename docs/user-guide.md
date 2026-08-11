@@ -10,23 +10,25 @@
 사전 요구: macOS/Linux · Claude Code v2.1.224+ · [Bun](https://bun.sh)
 (`bun --version` 안 되면 설치; 첫 기동 시 의존성 자동 설치를 위해 인터넷 필요).
 
-**1) 플러그인 설치** — Claude Code 안에서:
+**1) (사내망 사용자 권장) GitHub HTTPS 강제** — 사내망은 GitHub SSH(22번 포트)를 막는 경우가
+많다. GitHub SSH 키가 등록된 머신이면 설치가 `kex_exchange_identification` / `port 22 timed out`
+로 실패하는데, 아래 한 줄이면 git 이 clone 을 HTTPS(443, 사내망에서 안 막힘)로 처리한다.
+설치 전에 미리 실행해두면 그 실패를 겪지 않는다 (SSH 키를 쓰든 안 쓰든 무해).
+```bash
+git config --global url."https://github.com/".insteadOf "git@github.com:"
+```
+
+**2) 플러그인 설치** — Claude Code 안에서:
 ```text
 /plugin marketplace add hohre12/jwbae-plugins     # 이미 있으면 생략
 /plugin install team-relay@jwbae-plugins
 ```
 
-> 설치가 `kex_exchange_identification` / `port 22 timed out` 로 실패하면(사내망에서 SSH 키
-> 보유자): git 이 clone 을 SSH(22번, 사내망 차단)로 시도하는 것이다. `~/.ssh/config` 에
-> 아래를 넣어 SSH 를 443 포트로 우회한 뒤 재시도한다.
-> ```
-> Host github.com
->   HostName ssh.github.com
->   Port 443
->   User git
-> ```
+> 위 1) 을 안 했는데 `port 22 timed out` 로 실패했다면, 그 한 줄을 실행하고 다시 install 한다.
+> (SSH 를 계속 쓰고 싶으면 대안: `~/.ssh/config` 에 `Host github.com` / `HostName ssh.github.com`
+> / `Port 443` / `User git` 를 넣어 SSH 를 443 으로 우회.)
 
-**2) alias 등록** — 셸 프로필(`~/.zshrc`)에 넣고 터미널 재시작. 팀 연결이 필요한 세션은
+**3) alias 등록** — 셸 프로필(`~/.zshrc`)에 넣고 터미널 재시작. 팀 연결이 필요한 세션은
 `claude` 대신 `claude-team` 으로 켠다:
 ```bash
 # 기본 — 권한 프롬프트 정상 동작 (권장)
@@ -35,7 +37,7 @@ alias claude-team='TEAM_RELAY_GATEWAY=1 claude --dangerously-load-development-ch
 alias claude-team-yolo='TEAM_RELAY_GATEWAY=1 claude --dangerously-skip-permissions --dangerously-load-development-channels plugin:team-relay@jwbae-plugins'
 ```
 
-**3) 기동 + 참가** — `claude-team` 으로 세션을 켠다. 첫 1회만 확인 두 개(개발 채널 경고 →
+**4) 기동 + 참가** — `claude-team` 으로 세션을 켠다. 첫 1회만 확인 두 개(개발 채널 경고 →
 "I am using this for local development" 선택, 새 MCP 서버 → "Use this MCP server"). 그다음:
 ```text
 /team-relay:join <서버주소> <초대코드>
@@ -70,7 +72,7 @@ alias claude-team-yolo='TEAM_RELAY_GATEWAY=1 claude --dangerously-skip-permissio
 
 ## 잘 안 될 때
 
-- **설치가 `port 22 timed out`** → 위 설치의 SSH-over-443 우회 참고.
+- **설치가 `port 22 timed out`** → 설치 1) 의 `git config --global url."https://github.com/".insteadOf "git@github.com:"` 실행 후 재시도.
 - **`/team-relay:join` 이 없는 명령이라고 나옴** → 플러그인 미설치이거나 `claude-team` alias 없이 켰음.
 - **참가가 "연결할 수 없습니다"** → 관리자가 준 서버 주소가 맞는지, 회사 네트워크/VPN 에 연결돼 있는지 확인. 그래도 안 되면 관리자에게 문의.
 - **상대가 계속 오프라인으로 보임** → ① `/team-relay:status` 의 "수신(게이트웨이): 예" 확인(아니면 `claude` 가 아니라 `claude-team` 으로 다시 켜기) ② 상대도 `claude-team` 으로 켰는지 ③ `/plugin update team-relay@jwbae-plugins` 로 최신인지.

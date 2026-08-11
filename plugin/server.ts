@@ -59,7 +59,7 @@ function normalizeUrl(address: string): string {
 
 // ── MCP 서버 ─────────────────────────────────────────────
 const mcp = new Server(
-  { name: 'team-relay', version: '0.3.1' },
+  { name: 'team-relay', version: '0.3.2' },
   {
     capabilities: {
       // 이 키가 채널 등록의 전부. claude/channel/permission 은 의도적으로 미선언 —

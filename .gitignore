@@ -4,3 +4,4 @@ e2e/
 .env
 *.log
 .DS_Store
+*.pid

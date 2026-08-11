@@ -11,13 +11,23 @@
 
 ## 팀원 설치 (최초 1회, 약 2분)
 
-사전 요구: macOS/Linux · Claude Code v2.1.224+ · [Bun](https://bun.sh) (`bun --version` 안 되면 설치; 첫 기동 시 의존성 자동 설치를 위해 인터넷 필요) · 이 저장소 읽기 권한(관리자가 GitHub collaborator 로 초대).
+사전 요구: macOS/Linux · Claude Code v2.1.224+ · [Bun](https://bun.sh) (`bun --version` 안 되면 설치; 첫 기동 시 의존성 자동 설치를 위해 인터넷 필요).
 
 ```text
 # Claude Code 안에서:
 /plugin marketplace add hohre12/jwbae-plugins     # 이미 있으면 생략
 /plugin install team-relay@jwbae-plugins
 ```
+
+> 설치가 `kex_exchange_identification` / `port 22 timed out` 로 실패하면(사내망에서 SSH 키 보유자):
+> git 이 clone 을 SSH(22번, 사내망 차단)로 시도하는 것이다. `~/.ssh/config` 에 아래를 넣어
+> SSH 를 443 포트로 우회한 뒤 재시도한다.
+> ```
+> Host github.com
+>   HostName ssh.github.com
+>   Port 443
+>   User git
+> ```
 
 이후 **게이트웨이 세션은 아래 플래그로 기동**한다 (채널 research preview 동안 필요).
 셸 프로필에 alias 를 넣어두면 평소처럼 쓴다:
@@ -70,10 +80,13 @@ bun relay/cli.ts revoke minseo                   # 즉시 차단
 
 ## 트러블슈팅
 
-- **`/team-relay:join` 이 없는 명령** → 플러그인 미설치이거나 `--dangerously-load-development-channels plugin:team-relay@jwbae-plugins` 없이 기동함.
+- **설치가 `port 22 timed out` 로 실패** → 위 "팀원 설치"의 SSH-over-443 우회 참고 (사내망 + SSH 키 보유자).
+- **`/team-relay:join` 이 없는 명령** → 플러그인 미설치이거나 alias(`--dangerously-load-development-channels plugin:team-relay@jwbae-plugins`) 없이 켬.
+- **`/team-relay:join` 이 "연결할 수 없습니다"** → 서버 머신과 같은 사내망/VPN 인지 확인. 터미널에서 `nc -vz <서버IP> 8765` 가 `succeeded` 여야 함(안 되면 방화벽·네트워크 문제 — 관리자에게).
+- **`/team-relay:status` 에서 상대가 계속 오프라인** → ① 내 "수신(게이트웨이): 예" 인지 확인(아니면 alias 없이 켠 것 — `claude-team` 으로 다시). ② 상대도 `claude-team` 으로 켰는지. ③ 서버·플러그인 최신인지(`/plugin update team-relay@jwbae-plugins`).
+- **세션을 여러 개 켜지 말 것** → 팀 연결이 필요한 세션은 `claude-team` **하나만**. (구버전은 세션 종료 후 좀비가 남아 게이트웨이가 흔들렸다 — v0.3.1+ 에서 수리됨. 최신 유지 권장.)
 - **기동 배너에 "blocked by org policy"** → 조직 관리자가 채널을 켜야 함 (claude.ai Admin settings → Claude Code → Channels).
-- **메시지가 안 옴** → `/team-relay:status` 로 연결 확인 → 서버가 죽었으면 재기동(플러그인이 자동 재접속) → `/mcp` 로 채널 서버 상태, stderr 는 `~/.claude/debug/<session-id>.txt`.
-- 개발·검증: `bun test` (54개) · 로컬 2세션 데모: `bash scripts/e2e-demo.sh`
+- 관리자 운영: [docs/admin-guide.md](docs/admin-guide.md) · 개발·검증: `bun test` (56개) · 로컬 2세션 데모: `bash scripts/e2e-demo.sh`
 
 ---
 개인 프로젝트 — Jwbae \<hohre12@gmail.com\>

@@ -59,7 +59,7 @@ function normalizeUrl(address: string): string {
 
 // ── MCP 서버 ─────────────────────────────────────────────
 const mcp = new Server(
-  { name: 'team-relay', version: '0.3.0' },
+  { name: 'team-relay', version: '0.3.1' },
   {
     capabilities: {
       // 이 키가 채널 등록의 전부. claude/channel/permission 은 의도적으로 미선언 —
@@ -537,7 +537,21 @@ function formatRoster(frame: RelayFrame): string {
 }
 
 // ── 기동 ─────────────────────────────────────────────────
-await mcp.connect(new StdioServerTransport())
+const transport = new StdioServerTransport()
+
+/**
+ * 부모 세션(Claude Code)이 종료되면 stdin 이 닫힌다 → 이 프로세스도 즉시 종료해야 한다.
+ * 안 그러면 웹소켓 재접속 타이머·인터벌이 이벤트 루프를 살려둬 좀비로 남고, 그 좀비가
+ * 중계 서버에 게이트웨이로 계속 붙어 새 세션과 게이트웨이 자리를 두고 무한 핑퐁하며
+ * 명부를 불안정하게 만든다 (라이브 실측으로 확인된 좀비 버그). process.exit 로 강제 종료해
+ * 소켓을 즉시 닫는다. StdioServerTransport 의 onclose + stdin 'end'/'close' 이중 방어.
+ */
+const shutdown = (): void => process.exit(0)
+transport.onclose = shutdown
+process.stdin.on('end', shutdown)
+process.stdin.on('close', shutdown)
+
+await mcp.connect(transport)
 // 게이트웨이로 선언된 세션만 자동 접속 (감사 확정 #A — 일반 세션의 접속은 게이트웨이를
 // 탈취해 메시지 블랙홀을 만든다). 일반 세션은 도구 호출 시 gateway=false 로만 접속.
 if (IS_GATEWAY && loadConfig()) void connectWithConfig()

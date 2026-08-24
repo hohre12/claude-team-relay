@@ -228,6 +228,9 @@ async function deliverToSession(frame: RelayFrame): Promise<void> {
     ts: String(frame.ts ?? ''),
   }
   if (frame.queued) meta.queued = 'true'
+  // 스레드·답기대 — 답장 시 thread 보존, expect=none 이면 답장 불필요 (v1 §3.1)
+  if (frame.thread) meta.thread = String(frame.thread)
+  if (frame.expect) meta.expect = String(frame.expect)
   // 서버발 시스템 통지(from=_system)는 팀원 메시지와 구분되도록 표식을 붙인다
   if (frame.from === '_system') meta.kind = 'system'
   await mcp.notification({
@@ -268,6 +271,17 @@ function handleFrame(frame: RelayFrame): void {
   // expired 는 push — in-flight 응답으로 오소비 금지
   if (frame.type === 'expired') {
     void deliverExpired(frame)
+    return
+  }
+  // noack push — 내 발신이 기한 내 응답을 못 받았다는 통지 (v1 §3.3)
+  if (frame.type === 'noack') {
+    void mcp.notification({
+      method: 'notifications/claude/channel',
+      params: {
+        content: `[무응답] ${String(frame.to ?? '')}이(가) 아직 답하지 않았습니다 — 세션이 한도 초과·장기 작업·자리 비움 상태일 수 있습니다. 기다릴지, 다른 사람에게 물을지 사용자에게 알려 판단을 받아라. 재발신을 자의로 반복하지 마라.`,
+        meta: { kind: 'noack', to: String(frame.to ?? ''), room: String(frame.room ?? ''), thread: String(frame.thread ?? '') },
+      },
+    })
     return
   }
   // 게이트웨이 박탈(replaced)·차단(revoked) — 재접속하지 않고(핑퐁 방지) 사용자에게 알린다
@@ -457,8 +471,31 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
             description:
               '방 꼬리표 힌트 (선택) — 답장 시 수신 메시지 태그의 room 값을 그대로 넣는다. 생략하면 서버가 공유 방 중 첫 번째를 쓴다.',
           },
+          thread: {
+            type: 'string',
+            description: '스레드 id (선택) — 답장 시 수신 메시지 태그의 thread 값을 그대로 넣는다. 새 질문이면 생략(서버가 생성).',
+          },
+          expect: {
+            type: 'string',
+            enum: ['reply', 'none'],
+            description:
+              '답 기대 여부 (선택) — 질문·요청이면 reply, 단순 전달·공유면 none. 생략 시 서버 기본값: 새 스레드=reply, 답장=none.',
+          },
         },
         required: ['to', 'message'],
+      },
+    },
+    {
+      name: 'team_ack',
+      description:
+        '받은 팀 질문에 아직 답하지 못할 때 수신 확인을 보낸다 — 즉답이 어려우면 status:working, 자동답장 off 로 사용자 승인 대기면 status:approval_pending. 발신자의 무응답 알림을 막는다.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          thread: { type: 'string', description: '수신 메시지 태그의 thread 값' },
+          status: { type: 'string', enum: ['working', 'approval_pending'], description: '처리 상태' },
+        },
+        required: ['thread', 'status'],
       },
     },
     {
@@ -553,21 +590,37 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       if (!wsReady) await connectWithConfig()
       if (!wsReady) return ok('✗ 중계 서버에 연결돼 있지 않습니다 — /team-relay:join 으로 먼저 참가하세요')
       const frame: Record<string, unknown> = { type: 'send', to: args.to ?? '', text: args.message ?? '' }
-      // room 힌트는 지정됐을 때만 와이어에 싣는다 (v0 하위호환 — 생략 시 서버가 공유 방 첫 번째)
+      // room·thread·expect 는 지정됐을 때만 와이어에 싣는다 (생략 시 서버 기본값에 위임)
       if (args.room) frame.room = args.room
+      if (args.thread) frame.thread = args.thread
+      if (args.expect === 'reply' || args.expect === 'none') frame.expect = args.expect
       const res = await request(frame)
       if (res.type === 'sent') {
-        return ok(
+        const base =
           res.state === 'delivered'
-            ? `✓ ${args.to} 에게 즉시 배달됨`
-            : `✓ ${args.to} 는 오프라인 — 중계 서버가 보관, 접속 시 배달됩니다`,
-        )
+            ? `✓ ${args.to} 에게 즉시 배달됨 (스레드 ${res.thread})`
+            : `✓ ${args.to} 는 오프라인 — 중계 서버가 보관, 접속 시 배달됩니다 (스레드 ${res.thread})`
+        // 서버가 붙인 상태 노트 — 발신자가 기다릴지 판단할 재료
+        const warn =
+          res.note === 'unresponsive'
+            ? '\n⚠️ 상대가 최근 무응답 상태로 보입니다 (한도 초과·장기 작업·자리 비움 가능) — 답이 늦을 수 있습니다'
+            : res.note === 'away'
+              ? `\n🌙 ${args.to} 는 퇴근 상태 — 출근 시 배달됩니다`
+              : ''
+        return ok(base + warn)
       }
       const reason = String(res.reason ?? '')
       if (reason.startsWith('no_shared_room')) return ok(`✗ ${args.to} 와(과) 같은 방이 아닙니다 — 보낼 수 없습니다`)
       if (reason.startsWith('room_not_shared')) return ok(`✗ '${args.room}' 은(는) ${args.to} 와(과) 공유하는 방이 아닙니다 — room 을 빼거나 공유 방을 넣으세요`)
       if (reason.startsWith('unknown_member')) return ok(`✗ '${args.to}' 라는 팀원이 없습니다 (team_status 로 확인)`)
       return ok(`✗ 발신 실패: ${reason}`)
+    }
+    case 'team_ack': {
+      if (!wsReady) await connectWithConfig()
+      if (!wsReady) return ok('✗ 중계 서버에 연결돼 있지 않습니다 — /team-relay:join 으로 먼저 참가하세요')
+      const res = await request({ type: 'ack', thread: args.thread ?? '', status: args.status ?? 'working' })
+      if (res.type === 'ack_ok') return ok(`✓ 수신 확인 전송됨 (스레드 ${args.thread}) — 발신자의 무응답 알림이 해제됩니다`)
+      return ok(`✗ 수신 확인 실패: ${String(res.detail ?? res.reason ?? res.type)}`)
     }
     case 'team_route': {
       const cfg = loadConfig()
@@ -636,12 +689,15 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
 
 function formatRoster(frame: RelayFrame): string {
   const roster = (frame.roster ?? {}) as Record<string, { online: string[]; offline: string[] }>
+  const unresponsive = new Set((frame.unresponsive as string[] | undefined) ?? [])
+  const mark = (n: string): string => (unresponsive.has(n) ? `${n}⚠️` : n)
   const lines: string[] = []
   for (const [room, r] of Object.entries(roster)) {
-    const on = r.online.map(n => `🟢${n}`).join(' ')
-    const off = r.offline.map(n => `⚪${n}`).join(' ')
+    const on = r.online.map(n => `🟢${mark(n)}`).join(' ')
+    const off = r.offline.map(n => `⚪${mark(n)}`).join(' ')
     lines.push(`  [${room}] ${[on, off].filter(Boolean).join(' ') || '(혼자)'}`)
   }
+  if (unresponsive.size) lines.push('  ⚠️ = 최근 무응답 (배달돼도 답이 늦을 수 있음)')
   return lines.join('\n')
 }
 

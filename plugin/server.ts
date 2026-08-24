@@ -499,6 +499,18 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'team_away',
+      description:
+        '퇴근/출근 전환. 퇴근(on)이면 세션이 켜져 있어도 팀 메시지가 서버에 보관되고(보관 기한 정지), 출근(off)하면 한꺼번에 배달된다. 퇴근 중에도 발신은 가능하다.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          mode: { type: 'string', enum: ['on', 'off'], description: 'on = 퇴근(수신 보관) · off = 출근(보관분 배달)' },
+        },
+        required: ['mode'],
+      },
+    },
+    {
       name: 'team_route',
       description:
         '로컬 라우팅 등록표 관리 — 팀 질문의 키워드를 이 머신의 담당 세션에 매핑한다 (3단 위임의 1단). 팀 질문이 내 소관이 아니면 action:"list" 로 먼저 확인한다.',
@@ -622,6 +634,18 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       if (res.type === 'ack_ok') return ok(`✓ 수신 확인 전송됨 (스레드 ${args.thread}) — 발신자의 무응답 알림이 해제됩니다`)
       return ok(`✗ 수신 확인 실패: ${String(res.detail ?? res.reason ?? res.type)}`)
     }
+    case 'team_away': {
+      if (args.mode !== 'on' && args.mode !== 'off') return ok('✗ mode 는 "on"(퇴근) 또는 "off"(출근)만 허용됩니다')
+      if (!wsReady) await connectWithConfig()
+      if (!wsReady) return ok('✗ 중계 서버에 연결돼 있지 않습니다 — /team-relay:join 으로 먼저 참가하세요')
+      const res = await request({ type: 'away', on: args.mode === 'on' })
+      if (res.type !== 'away_ok') return ok(`✗ 전환 실패: ${String(res.detail ?? res.reason ?? res.type)}`)
+      return ok(
+        res.away
+          ? '🌙 퇴근 처리 완료 — 팀 메시지는 서버에 보관되고(보관 기한 정지) 출근 시 배달됩니다. 발신은 계속 가능합니다.'
+          : `✓ 출근 처리 완료 — 보관 ${Number(res.pending ?? 0)}건이 곧 배달됩니다. 여러 건이면 개별 반응 전에 부재중 브리핑부터 사용자에게 보고하세요.`,
+      )
+    }
     case 'team_route': {
       const cfg = loadConfig()
       if (!cfg) return ok('✗ 아직 팀에 참가하지 않았습니다 — /team-relay:join 으로 먼저 참가하세요')
@@ -680,7 +704,14 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       if (!wsReady) await connectWithConfig()
       if (!wsReady) return ok(`✗ 중계 서버(${cfg.url}) 오프라인 — 내 이름: ${cfg.name}\n${gwLine}\n${autoLine}`)
       const st = await request({ type: 'status' })
-      return ok(`내 이름: ${st.name} · 연결됨 (${cfg.url})\n${gwLine}\n${autoLine}\n${formatRoster(st)}`)
+      const awayLine = st.myAway
+        ? '상태: 🌙 퇴근 중 — 수신은 보관되며(기한 정지), team_away(mode:"off") 로 출근하면 배달됩니다'
+        : null
+      return ok(
+        [`내 이름: ${st.name} · 연결됨 (${cfg.url})`, gwLine, autoLine, awayLine, formatRoster(st)]
+          .filter(Boolean)
+          .join('\n'),
+      )
     }
     default:
       throw new Error(`unknown tool: ${req.params.name}`)
@@ -690,14 +721,19 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
 function formatRoster(frame: RelayFrame): string {
   const roster = (frame.roster ?? {}) as Record<string, { online: string[]; offline: string[] }>
   const unresponsive = new Set((frame.unresponsive as string[] | undefined) ?? [])
-  const mark = (n: string): string => (unresponsive.has(n) ? `${n}⚠️` : n)
+  const away = new Set((frame.away as string[] | undefined) ?? [])
+  const mark = (n: string): string => `${away.has(n) ? '🌙' : ''}${n}${unresponsive.has(n) ? '⚠️' : ''}`
   const lines: string[] = []
   for (const [room, r] of Object.entries(roster)) {
     const on = r.online.map(n => `🟢${mark(n)}`).join(' ')
     const off = r.offline.map(n => `⚪${mark(n)}`).join(' ')
     lines.push(`  [${room}] ${[on, off].filter(Boolean).join(' ') || '(혼자)'}`)
   }
-  if (unresponsive.size) lines.push('  ⚠️ = 최근 무응답 (배달돼도 답이 늦을 수 있음)')
+  const legend = [
+    away.size ? '🌙 = 퇴근 중 (보관 후 출근 시 배달)' : null,
+    unresponsive.size ? '⚠️ = 최근 무응답 (배달돼도 답이 늦을 수 있음)' : null,
+  ].filter(Boolean)
+  if (legend.length) lines.push(`  ${legend.join(' · ')}`)
   return lines.join('\n')
 }
 

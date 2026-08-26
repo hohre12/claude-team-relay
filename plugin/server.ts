@@ -209,6 +209,17 @@ const IS_GATEWAY = process.env.TEAM_RELAY_GATEWAY === '1'
 let connectEpoch = 0
 /** 진행 중 연결 시도의 소켓 — join/서버변경이 즉시 취소할 수 있도록 추적 */
 let connectingSock: WebSocket | null = null
+/**
+ * 자동 재접속 정지 — 회복 불가능한 인증 실패(auth_failed·plugin_outdated·revoked) 후에는
+ * 폐기된 토큰으로 30초마다 무한 재시도하지 않는다 (리뷰 m1). 사용자의 명시 행동
+ * (join/서버변경 = abandonCurrentLink)이 해제한다.
+ */
+let reconnectHalted = false
+/**
+ * join 진행 중 표식 — join 이 소켓을 점유한 동안 다른 도구 호출의 connectWithConfig 가
+ * 옛 설정으로 소켓을 열어 ws 를 덮어쓰는 경합을 차단한다 (리뷰 M1).
+ */
+let joinInProgress = false
 
 /**
  * v1 요청 id 매칭 — 응답은 요청 id 로 짝짓는다. 타임아웃으로 폐기된 id 의 늦은 응답은
@@ -263,7 +274,7 @@ async function deliverExpired(frame: RelayFrame): Promise<void> {
   })
 }
 
-function handleFrame(frame: RelayFrame): void {
+function handleFrame(frame: RelayFrame, sock?: WebSocket): void {
   if (frame.type === 'message') {
     void deliverToSession(frame)
     return
@@ -286,11 +297,19 @@ function handleFrame(frame: RelayFrame): void {
   }
   // 게이트웨이 박탈(replaced)·차단(revoked) — 재접속하지 않고(핑퐁 방지) 사용자에게 알린다
   if (frame.type === 'error' && (frame.reason === 'replaced_by_new_gateway' || frame.reason === 'revoked')) {
+    // 이 통지가 도착한 소켓이 현재 링크일 때만 박탈 처리 (리뷰 C1) — 유령(옛) 소켓으로 온
+    // 통지가 멀쩡한 새 링크를 오염시키고 허위 '수신 이전' 알림을 내면 안 된다.
+    if (sock && sock !== ws) {
+      deliberateClose.add(sock)
+      try { sock.close() } catch { /* 이미 닫힘 */ }
+      return
+    }
     if (ws) {
       deliberateClose.add(ws) // close 리스너가 재접속을 걸지 않게
       wsReady = false
     }
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+    if (frame.reason === 'revoked') reconnectHalted = true // 차단 — 도구 호출로도 루프 부활 금지 (m1)
     void notifyGatewayLost(String(frame.reason))
     return
   }
@@ -311,7 +330,7 @@ function openSocket(url: string, onOpen: (sock: WebSocket) => void): WebSocket {
   sock.addEventListener('open', () => onOpen(sock))
   sock.addEventListener('message', ev => {
     try {
-      handleFrame(JSON.parse(String(ev.data)) as RelayFrame)
+      handleFrame(JSON.parse(String(ev.data)) as RelayFrame, sock)
     } catch {
       log('잘못된 프레임 수신 (무시)')
     }
@@ -336,7 +355,7 @@ function openSocket(url: string, onOpen: (sock: WebSocket) => void): WebSocket {
 }
 
 function scheduleReconnect(): void {
-  if (reconnectTimer || !loadConfig()) return
+  if (reconnectHalted || reconnectTimer || !loadConfig()) return
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null
     reconnectDelay = Math.min(reconnectDelay * 2, 30_000)
@@ -348,6 +367,7 @@ function scheduleReconnect(): void {
 async function connectWithConfig(): Promise<RelayFrame | null> {
   const cfg = loadConfig()
   if (!cfg) return null
+  if (joinInProgress) return null // join 이 소켓을 점유 중 — 옛 설정으로 덮어쓰지 않는다 (리뷰 M1)
   if (ws && wsReady) return null
   if (connectPromise) return connectPromise // 진행 중인 시도에 합류 (경합·즉시이탈 둘 다 방지)
   const epoch = connectEpoch
@@ -379,15 +399,31 @@ async function connectWithConfig(): Promise<RelayFrame | null> {
           if (frame.type === 'welcome') {
             wsReady = true
             reconnectDelay = 1000
+            reconnectHalted = false
             if (Number(frame.v) > PROTO) log(`서버 프로토콜(v${frame.v})이 플러그인(v${PROTO})보다 새 버전 — /plugin update 권장`)
             maybeUpdateProtocolCache(frame)
             log(`'${cfg.name}' 으로 접속 완료 (${cfg.url})`)
           } else {
             log(`인증 실패: ${String(frame.detail ?? frame.reason ?? frame.type)}`)
+            // 회복 불가능한 인증 실패 — 이 소켓을 폐기하고 자동 재접속을 멈춘다 (리뷰 m1)
+            if (frame.reason === 'auth_failed' || frame.reason === 'plugin_outdated') {
+              reconnectHalted = true
+              deliberateClose.add(s)
+              if (ws === s) { ws = null; wsReady = false }
+              try { s.close() } catch { /* 서버가 이미 닫음 */ }
+            }
           }
           finish(frame)
         },
-        () => finish(null), // 타임아웃 — 연결 시도 종결 (미종결 Promise 잔존 방지)
+        () => {
+          // hello 무응답 타임아웃 — 유령 소켓을 남기지 않는다 (리뷰 C1). 소켓을 닫고
+          // 현재 링크에서 해제한 뒤 정상 백오프로 재시도한다.
+          deliberateClose.add(s)
+          if (ws === s) { ws = null; wsReady = false }
+          try { s.close() } catch { /* 이미 닫힘 */ }
+          finish(null)
+          scheduleReconnect()
+        },
       )
     })
   })
@@ -414,6 +450,7 @@ function request(obj: Record<string, unknown>): Promise<RelayFrame> {
 /** 현재 링크·진행 중 시도를 전부 폐기하고 세대를 올린다 — join/서버변경의 선행 절차 */
 function abandonCurrentLink(): void {
   connectEpoch += 1
+  reconnectHalted = false // join/서버변경 = 사용자의 명시적 재시도 의사 — 정지 해제 (m1)
   // 폐기된 링크의 in-flight 요청 전부 즉시 종결 (체인 블로킹 방지)
   for (const p of pending.values()) {
     clearTimeout(p.timer)
@@ -568,6 +605,10 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       const existing = loadConfig()
       // 기존 링크·진행 중 시도 전부 폐기 + 세대 상승
       abandonCurrentLink()
+      // join 이 끝날 때까지 다른 도구 호출의 접속 시도를 차단 — 옛 설정 소켓이
+      // join 의 ws 를 덮어쓰는 경합 방지 (리뷰 M1)
+      joinInProgress = true
+      try {
       const joined = await new Promise<RelayFrame>((resolve, reject) => {
         // 타임아웃 후 유령 소켓의 join 발신 금지 (초대코드 소모 방지)
         let cancelled = false
@@ -596,13 +637,34 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       if (!token) return ok('✗ 서버가 토큰을 주지 않았고 기존 토큰도 없습니다 — 관리자에게 문의')
       // 라우팅 등록표·자동답장 토글 등 로컬 설정은 재참가해도 보존한다
       saveConfig({ ...(existing ?? {}), url, token, name: String(joined.name) })
-      const welcome = await request({ type: 'hello', v: PROTO, plugin: PLUGIN_VERSION, token, gateway: IS_GATEWAY })
-      if (welcome.type === 'welcome') {
-        wsReady = true
-        maybeUpdateProtocolCache(welcome)
+      // 후속 hello 실패는 참가 실패가 아니다 (리뷰 m2) — 초대코드는 이미 소모·토큰은 저장됨.
+      // 원시 예외로 터뜨리면 사용자가 재발급을 요청하는 헛걸음을 하게 된다.
+      let welcome: RelayFrame | null = null
+      try {
+        welcome = await request({ type: 'hello', v: PROTO, plugin: PLUGIN_VERSION, token, gateway: IS_GATEWAY })
+      } catch {
+        // hello 무응답 — 유령 소켓을 남기지 않고(리뷰 C1) 백그라운드 재시도로 넘긴다
+        if (ws) {
+          deliberateClose.add(ws)
+          try { ws.close() } catch { /* 이미 닫힘 */ }
+          ws = null
+          wsReady = false
+        }
+        scheduleReconnect()
       }
       const rooms = (joined.rooms as string[]).join(', ')
+      if (welcome?.type !== 'welcome') {
+        return ok(
+          `✓ '${joined.name}' 으로 참가 완료 — 소속 방: ${rooms}. 토큰이 저장됐고 초대코드는 정상 소모됐으니 재발급은 필요 없습니다.\n` +
+            '다만 접속 확인 응답이 아직 없어 백그라운드에서 자동 재시도합니다 — 세션 재시작으로도 해결됩니다.',
+        )
+      }
+      wsReady = true
+      maybeUpdateProtocolCache(welcome)
       return ok(`✓ '${joined.name}' 으로 참가 완료 — 소속 방: ${rooms}\n${formatRoster(welcome)}\n이후 세션부터는 자동 접속됩니다.`)
+      } finally {
+        joinInProgress = false
+      }
     }
     case 'team_send': {
       if (!wsReady) await connectWithConfig()

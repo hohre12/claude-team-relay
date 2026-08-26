@@ -18,9 +18,10 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, w
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
-/** 라우팅 등록표 항목 — 3단 위임의 1단(명시 등록표) */
+/** 라우팅 등록표 항목 — 3단 위임의 1단(명시 등록표). keywords 또는 room 중 하나 이상 */
 interface RouteEntry {
-  keywords: string // 매칭 키워드 (사람이 읽는 자유 문자열)
+  keywords?: string // 매칭 키워드 (사람이 읽는 자유 문자열)
+  room?: string // 방 바인딩 (v1 §6.5) — 이 방 꼬리표의 질문은 이 세션으로 (키워드 매칭보다 우선)
   session: string // 이 머신에서 위임받을 세션 이름
 }
 
@@ -553,12 +554,13 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'team_route',
       description:
-        '로컬 라우팅 등록표 관리 — 팀 질문의 키워드를 이 머신의 담당 세션에 매핑한다 (3단 위임의 1단). 팀 질문이 내 소관이 아니면 action:"list" 로 먼저 확인한다.',
+        '로컬 라우팅 등록표 관리 — 팀 질문의 키워드 또는 방(room)을 이 머신의 담당 세션에 매핑한다 (3단 위임의 1단, 방 바인딩이 키워드보다 우선). 팀 질문이 내 소관이 아니면 action:"list" 로 먼저 확인한다.',
       inputSchema: {
         type: 'object',
         properties: {
           action: { type: 'string', enum: ['list', 'add', 'remove'], description: '수행할 동작' },
-          keywords: { type: 'string', description: '매칭 키워드 (add·remove 에 필요)' },
+          keywords: { type: 'string', description: '매칭 키워드 (add·remove — keywords 또는 room 중 하나)' },
+          room: { type: 'string', description: '방 바인딩 — 이 방 꼬리표의 질문을 지정 세션으로 (키워드보다 우선)' },
           session: { type: 'string', description: '위임받을 세션 이름 (add 에 필요)' },
         },
         required: ['action'],
@@ -771,25 +773,32 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       const cfg = loadConfig()
       if (!cfg) return ok('✗ 아직 팀에 참가하지 않았습니다 — /team-relay:join 으로 먼저 참가하세요')
       const routes = cfg.routes ?? []
+      const label = (r: RouteEntry): string =>
+        r.room ? `[방 ${r.room}] → ${r.session}` : `"${r.keywords}" → ${r.session}`
       switch (args.action) {
         case 'list': {
           if (routes.length === 0) return ok('라우팅 등록표가 비어 있습니다 — team_route(action:"add") 로 등록할 수 있습니다')
-          return ok(['라우팅 등록표 (키워드 → 세션):', ...routes.map(r => `  "${r.keywords}" → ${r.session}`)].join('\n'))
+          return ok(['라우팅 등록표 (방 바인딩이 키워드보다 우선):', ...routes.map(r => `  ${label(r)}`)].join('\n'))
         }
         case 'add': {
-          if (!args.keywords || !args.session) return ok('✗ add 에는 keywords 와 session 이 모두 필요합니다')
-          // 같은 키워드의 기존 항목은 새 세션으로 교체 (중복 누적 방지)
-          const rest = routes.filter(r => r.keywords !== args.keywords)
+          if ((!args.keywords && !args.room) || !args.session) {
+            return ok('✗ add 에는 session 과 함께 keywords 또는 room 중 하나 이상이 필요합니다')
+          }
+          // 같은 키워드/같은 방의 기존 항목은 새 세션으로 교체 (중복 누적 방지)
+          const rest = routes.filter(r => !(args.keywords && r.keywords === args.keywords) && !(args.room && r.room === args.room))
           const replaced = rest.length !== routes.length
-          saveConfig({ ...cfg, routes: [...rest, { keywords: args.keywords, session: args.session }] })
-          return ok(`✓ 등록${replaced ? ' (기존 항목 교체)' : ''}: "${args.keywords}" → ${args.session}`)
+          const entry: RouteEntry = { session: args.session }
+          if (args.keywords) entry.keywords = args.keywords
+          if (args.room) entry.room = args.room
+          saveConfig({ ...cfg, routes: [...rest, entry] })
+          return ok(`✓ 등록${replaced ? ' (기존 항목 교체)' : ''}: ${label(entry)}`)
         }
         case 'remove': {
-          if (!args.keywords) return ok('✗ remove 에는 keywords 가 필요합니다')
-          const rest = routes.filter(r => r.keywords !== args.keywords)
-          if (rest.length === routes.length) return ok(`✗ "${args.keywords}" 로 등록된 항목이 없습니다 (action:"list" 로 확인)`)
+          if (!args.keywords && !args.room) return ok('✗ remove 에는 keywords 또는 room 이 필요합니다')
+          const rest = routes.filter(r => !(args.keywords && r.keywords === args.keywords) && !(args.room && r.room === args.room))
+          if (rest.length === routes.length) return ok(`✗ 해당 등록 항목이 없습니다 (action:"list" 로 확인)`)
           saveConfig({ ...cfg, routes: rest })
-          return ok(`✓ 제거: "${args.keywords}"`)
+          return ok(`✓ 제거: ${args.room ? `[방 ${args.room}]` : `"${args.keywords}"`}`)
         }
         default:
           return ok(`✗ 알 수 없는 action: ${args.action ?? '(없음)'} — list|add|remove 중 하나`)

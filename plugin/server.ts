@@ -242,6 +242,9 @@ async function deliverToSession(frame: RelayFrame): Promise<void> {
   // 스레드·답기대 — 답장 시 thread 보존, expect=none 이면 답장 불필요 (v1 §3.1)
   if (frame.thread) meta.thread = String(frame.thread)
   if (frame.expect) meta.expect = String(frame.expect)
+  // 메시지 구분자 — notice(공지)·agree_propose(합의 제안) 등 (v1 §6.2·§6.3)
+  if (frame.kind) meta.kind = String(frame.kind)
+  if (frame.agree) meta.agree = String(frame.agree)
   // 서버발 시스템 통지(from=_system)는 팀원 메시지와 구분되도록 표식을 붙인다
   if (frame.from === '_system') meta.kind = 'system'
   await mcp.notification({
@@ -574,6 +577,26 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'team_agree',
+      description:
+        '팀 인터페이스 합의 대장 — 문답으로 도달한 합의를 양측 확인으로 확정 기록한다. propose(제안, 상대 확인 필요) · confirm/reject(받은 제안 처리 — 직전 대화와 대조 후) · list(확정 합의는 같은 방 전원 열람).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['propose', 'confirm', 'reject', 'list'], description: '수행할 동작' },
+          to: { type: 'string', description: 'propose: 합의 상대 팀원 이름' },
+          summary: { type: 'string', description: 'propose: 합의 내용 한 문장 (예: "source_ref 는 string[] · 빈 배열 허용")' },
+          details: { type: 'string', description: 'propose: 상세 (선택 — 스키마·예시 등)' },
+          thread: { type: 'string', description: 'propose: 이 합의가 나온 문답의 thread (선택)' },
+          room: { type: 'string', description: 'propose: 방 지정 (선택)' },
+          agree_id: { type: 'string', description: 'confirm·reject: 받은 제안의 agree id (수신 meta 의 agree)' },
+          reason: { type: 'string', description: 'reject: 거절 사유 — 대화와 어떻게 다른지' },
+          peer: { type: 'string', description: 'list: 당사자 필터 (선택)' },
+        },
+        required: ['action'],
+      },
+    },
+    {
       name: 'team_history',
       description:
         '내가 주고받은 팀 메시지 히스토리를 조회한다 (내 문답만 — 제3자 대화 불가). 과거에 물었던 내용은 상대에게 재질문하기 전에 여기서 먼저 확인한다.',
@@ -770,6 +793,64 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         return ok(`✓ 중계 서버를 ${url} 로 변경 — '${cfg.name}' 으로 접속 완료 (기존 토큰 유지)\n${formatRoster(welcome)}`)
       }
       return ok(`서버 주소를 ${url} 로 저장했습니다 — 지금은 연결되지 않아 백그라운드에서 자동 재시도합니다 (기존 토큰 유지)`)
+    }
+    case 'team_agree': {
+      if (!wsReady) await connectWithConfig()
+      if (!wsReady) return ok('✗ 중계 서버에 연결돼 있지 않습니다 — /team-relay:join 으로 먼저 참가하세요')
+      switch (args.action) {
+        case 'propose': {
+          if (!args.to || !args.summary) return ok('✗ propose 에는 to 와 summary 가 필요합니다')
+          const frame: Record<string, unknown> = { type: 'agree_propose', to: args.to, summary: args.summary }
+          if (args.details) frame.details = args.details
+          if (args.thread) frame.thread = args.thread
+          if (args.room) frame.room = args.room
+          const res = await request(frame)
+          if (res.type !== 'agree_ok') return ok(`✗ 합의 제안 실패: ${String(res.detail ?? res.reason ?? res.type)}`)
+          return ok(
+            res.state === 'delivered'
+              ? `✓ 합의 제안 전달됨 (${res.agree}) — 상대 에이전트가 확인(confirm)하면 대장에 기록됩니다`
+              : `✓ 합의 제안 보관됨 (${res.agree}) — 상대 접속 시 전달, 72시간 내 미확인이면 만료 통지가 옵니다`,
+          )
+        }
+        case 'confirm':
+        case 'reject': {
+          if (!args.agree_id) return ok('✗ agree_id 가 필요합니다 (수신 메시지 meta 의 agree 값)')
+          const frame: Record<string, unknown> = { type: 'agree_resolve', agree: args.agree_id, result: args.action }
+          if (args.reason) frame.reason = args.reason
+          const res = await request(frame)
+          if (res.type !== 'agree_resolved') {
+            if (res.reason === 'agree_not_found') return ok('✗ 해당 제안이 없습니다 — 이미 처리됐거나 만료됐습니다')
+            if (res.reason === 'agree_not_mine') return ok('✗ 이 제안의 확인 당사자가 아닙니다')
+            return ok(`✗ 처리 실패: ${String(res.detail ?? res.reason ?? res.type)}`)
+          }
+          return ok(res.result === 'confirm' ? `✓ 합의 확정 (${res.agree}) — 대장에 기록되고 제안자에게 통지됩니다` : `✓ 합의 거절 처리 (${res.agree}) — 제안자에게 사유가 통지됩니다`)
+        }
+        case 'list': {
+          const frame: Record<string, unknown> = { type: 'agree_list' }
+          if (args.peer) frame.peer = args.peer
+          const res = await request(frame)
+          if (res.type !== 'agrees') return ok(`✗ 조회 실패: ${String(res.detail ?? res.reason ?? res.type)}`)
+          const entries = (res.entries ?? []) as Array<{ agree: string; ts: number; room: string; a: string; b: string; summary: string; details?: string }>
+          const pending = (res.pending ?? []) as Array<{ agree: string; a: string; b: string; summary: string }>
+          const lines: string[] = []
+          if (entries.length) {
+            lines.push(`확정 합의 (${entries.length}건):`)
+            for (const e of entries) {
+              const t = new Date(e.ts).toISOString().slice(0, 10)
+              lines.push(`  [${t}] [${e.room}] ${e.a} ↔ ${e.b}: ${e.summary}${e.details ? ` — ${e.details}` : ''} (${e.agree})`)
+            }
+          } else {
+            lines.push('확정 합의가 없습니다')
+          }
+          if (pending.length) {
+            lines.push(`확인 대기 (당사자만 보임, ${pending.length}건):`)
+            for (const p of pending) lines.push(`  ${p.a} → ${p.b}: ${p.summary} (${p.agree})`)
+          }
+          return ok(lines.join('\n'))
+        }
+        default:
+          return ok(`✗ 알 수 없는 action: ${args.action ?? '(없음)'} — propose|confirm|reject|list`)
+      }
     }
     case 'team_history': {
       if (!wsReady) await connectWithConfig()

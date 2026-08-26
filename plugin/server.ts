@@ -14,7 +14,7 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
@@ -537,6 +537,12 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'team_doctor',
+      description:
+        '팀 연결 자가 진단 — 설정·게이트웨이 선언·규약·서버 연결·보관 큐를 ✓/✗ 로 점검하고 문제마다 처방을 제시한다. "팀 메시지가 안 와요" 류 문제의 1차 진단 도구.',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
       name: 'team_status',
       description:
         '팀 연결 상태 — 내 이름·소속 방·방별 온라인/오프라인 팀원·자동답장 토글. auto_reply 파라미터로 자동답장을 전환할 수 있다.',
@@ -687,6 +693,67 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         return ok(`✓ 중계 서버를 ${url} 로 변경 — '${cfg.name}' 으로 접속 완료 (기존 토큰 유지)\n${formatRoster(welcome)}`)
       }
       return ok(`서버 주소를 ${url} 로 저장했습니다 — 지금은 연결되지 않아 백그라운드에서 자동 재시도합니다 (기존 토큰 유지)`)
+    }
+    case 'team_doctor': {
+      // 부분 실패 허용 — 서버가 죽어 있어도 로컬 점검 결과는 반드시 출력한다 (§5.1)
+      const lines: string[] = ['team-relay 자가 진단']
+      const check = (good: boolean, label: string, detail: string, fix?: string): void => {
+        lines.push(`  ${good ? '✓' : '✗'} ${label}: ${detail}`)
+        if (!good && fix) lines.push(`     → ${fix}`)
+      }
+      // ── 로컬 점검 ──
+      const cfg = loadConfig()
+      if (!cfg) {
+        check(false, '설정', `없음 또는 파싱 불가 (${CONFIG_PATH})`, '/team-relay:join <서버주소> <초대코드> 로 참가하세요')
+      } else {
+        check(true, '설정', `${cfg.name} @ ${cfg.url}`)
+        try {
+          const mode = statSync(CONFIG_PATH).mode & 0o777
+          check(mode === 0o600, '설정 권한', `0${mode.toString(8)}`, `chmod 600 ${CONFIG_PATH} 를 실행하세요 (토큰 보호)`)
+        } catch { /* 존재는 위에서 확인됨 */ }
+      }
+      check(
+        IS_GATEWAY,
+        '수신(게이트웨이) 선언',
+        IS_GATEWAY ? '예' : '아니요 — 이 세션은 발신 전용',
+        '팀 메시지를 받으려면 claude 대신 claude-team 으로 세션을 켜세요 (의도된 발신 전용 세션이면 정상)',
+      )
+      check(true, '런타임', `Bun ${Bun.version} · 플러그인 v${PLUGIN_VERSION} · 프로토콜 v${PROTO}`)
+      check(
+        !!protocolCache,
+        '규약',
+        protocolCache ? `rev ${protocolCache.rev} (캐시)` : '캐시 없음 — 내장 최소 폴백으로 동작 중',
+        '서버 접속 후 세션을 재시작하면 전체 규약이 적용됩니다',
+      )
+      // ── 서버 점검 (설정이 있을 때만) ──
+      if (cfg) {
+        if (!wsReady) await connectWithConfig()
+        check(wsReady, '연결', wsReady ? `연결됨 (${cfg.url})` : `연결 실패 (${cfg.url})`, '서버 주소·사내망(VPN)을 확인하세요 — 계속 안 되면 관리자 문의')
+        if (wsReady) {
+          try {
+            const d = await request({ type: 'doctor' })
+            if (d.type === 'doctor') {
+              if (d.protocolRev !== null && d.protocolRev !== undefined) {
+                const same = protocolCache?.rev === Number(d.protocolRev)
+                check(same, '규약 rev', same ? `rev ${d.protocolRev} — 최신` : `서버 rev ${d.protocolRev} / 캐시 rev ${protocolCache?.rev ?? '없음'}`, '세션을 재시작하면 새 규약이 적용됩니다')
+              }
+              if (d.away) lines.push('  🌙 퇴근 중 — 수신은 보관됩니다 (team_away mode:"off" 로 출근)')
+              const q = Number(d.queueForMe ?? 0)
+              if (q > 0 && IS_GATEWAY && !d.away) {
+                check(false, '보관 큐', `보관 ${q}건이 배달되지 않고 있습니다`, '/team-relay:status 로 수신 상태 확인 — 다른 claude-team 세션이 수신을 가져갔을 수 있습니다')
+              } else {
+                check(true, '보관 큐', q === 0 ? '없음' : `보관 ${q}건${d.away ? ' (퇴근 중 — 정상)' : ''}`)
+              }
+              const skew = Math.abs(Date.now() - Number(d.serverTime ?? Date.now()))
+              check(skew < 60_000, '시계 동기', `서버와의 차이 ${Math.round(skew / 1000)}초`, '보관 만료·무응답 판정은 서버 시각 기준입니다 — 머신 시계를 확인하세요')
+              lines.push(`  ℹ️ 감사 로그: ${d.audit ? '켜짐 (팀 서버에 대화 기록)' : '꺼짐'}`)
+            }
+          } catch (e) {
+            check(false, '서버 진단', `실패: ${(e as Error).message}`)
+          }
+        }
+      }
+      return ok(lines.join('\n'))
     }
     case 'team_status': {
       let cfg = loadConfig()

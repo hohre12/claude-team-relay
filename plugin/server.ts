@@ -577,6 +577,21 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'team_room',
+      description:
+        '방장 전용 — 내가 방장인 방의 초대코드 발급(invite)·방 단위 추방(kick, 전역 차단 아님)·방 전원 공지(notice). 방장 지정은 서버 관리자가 한다.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['invite', 'kick', 'notice'], description: '수행할 동작' },
+          room: { type: 'string', description: '대상 방 (내가 방장인 방)' },
+          name: { type: 'string', description: 'invite: 새 팀원 이름 · kick: 제외할 팀원 이름' },
+          text: { type: 'string', description: 'notice: 공지 내용' },
+        },
+        required: ['action', 'room'],
+      },
+    },
+    {
       name: 'team_agree',
       description:
         '팀 인터페이스 합의 대장 — 문답으로 도달한 합의를 양측 확인으로 확정 기록한다. propose(제안, 상대 확인 필요) · confirm/reject(받은 제안 처리 — 직전 대화와 대조 후) · list(확정 합의는 같은 방 전원 열람).',
@@ -793,6 +808,45 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         return ok(`✓ 중계 서버를 ${url} 로 변경 — '${cfg.name}' 으로 접속 완료 (기존 토큰 유지)\n${formatRoster(welcome)}`)
       }
       return ok(`서버 주소를 ${url} 로 저장했습니다 — 지금은 연결되지 않아 백그라운드에서 자동 재시도합니다 (기존 토큰 유지)`)
+    }
+    case 'team_room': {
+      if (!wsReady) await connectWithConfig()
+      if (!wsReady) return ok('✗ 중계 서버에 연결돼 있지 않습니다 — /team-relay:join 으로 먼저 참가하세요')
+      const room = args.room ?? ''
+      const notOwner = (res: RelayFrame): string | null =>
+        res.reason === 'not_room_owner' ? `✗ '${room}' 방의 방장이 아닙니다 — 방장 지정은 서버 관리자(relay room owner)가 합니다` : null
+      switch (args.action) {
+        case 'invite': {
+          if (!args.name) return ok('✗ invite 에는 name(새 팀원 이름)이 필요합니다')
+          const res = await request({ type: 'room_invite', room, name: args.name })
+          if (res.type !== 'room_invite_ok') return ok(notOwner(res) ?? `✗ 초대 실패: ${String(res.detail ?? res.reason ?? res.type)}`)
+          return ok(`✓ 초대코드 (1회용 · '${room}' 방 · '${args.name}'):\n\n  ${res.code}\n\n팀원에게 전달하세요 → /team-relay:join <서버주소> ${res.code}`)
+        }
+        case 'kick': {
+          if (!args.name) return ok('✗ kick 에는 name(제외할 팀원 이름)이 필요합니다')
+          const res = await request({ type: 'room_kick', room, name: args.name })
+          if (res.type !== 'room_kick_ok') {
+            if (res.reason === 'not_in_room') return ok(`✗ '${args.name}'은(는) '${room}' 방 소속이 아닙니다`)
+            return ok(notOwner(res) ?? `✗ 제외 실패: ${String(res.detail ?? res.reason ?? res.type)}`)
+          }
+          return ok(`✓ '${args.name}'을(를) '${room}' 방에서 제외했습니다 (다른 방 소속·토큰은 유지 — 전역 차단은 관리자 revoke). 그 방 보관분은 폐기되고 발신자들에게 통지됩니다.`)
+        }
+        case 'notice': {
+          if (!args.text) return ok('✗ notice 에는 text(공지 내용)가 필요합니다')
+          const res = await request({ type: 'room_notice', room, text: args.text })
+          if (res.type !== 'room_notice_ok') {
+            if (res.reason === 'notice_rate_limited') return ok('✗ 공지 발송 한도 초과(분당 상한) — 잠시 후 다시 시도하세요')
+            return ok(notOwner(res) ?? `✗ 공지 실패: ${String(res.detail ?? res.reason ?? res.type)}`)
+          }
+          const skipped = (res.skipped as string[] | undefined) ?? []
+          return ok(
+            `✓ '${room}' 공지 발송 — 즉시 배달 ${res.delivered}명 · 보관 ${res.queued}명` +
+              (skipped.length ? `\n⚠️ 보관함 만석으로 못 받은 팀원: ${skipped.join(', ')} — 직접 전달이 필요합니다` : ''),
+          )
+        }
+        default:
+          return ok(`✗ 알 수 없는 action: ${args.action ?? '(없음)'} — invite|kick|notice`)
+      }
     }
     case 'team_agree': {
       if (!wsReady) await connectWithConfig()

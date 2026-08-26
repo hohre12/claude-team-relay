@@ -574,6 +574,21 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'team_history',
+      description:
+        '내가 주고받은 팀 메시지 히스토리를 조회한다 (내 문답만 — 제3자 대화 불가). 과거에 물었던 내용은 상대에게 재질문하기 전에 여기서 먼저 확인한다.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          peer: { type: 'string', description: '상대 팀원 이름 필터 (선택)' },
+          room: { type: 'string', description: '방 필터 (선택)' },
+          thread: { type: 'string', description: '스레드 필터 (선택) — 특정 문답만' },
+          limit: { type: 'string', description: '최근 N건 (기본 20 · 최대 100)' },
+          before: { type: 'string', description: '이 ts(밀리초) 이전만 — 이전 페이지 조회용' },
+        },
+      },
+    },
+    {
       name: 'team_doctor',
       description:
         '팀 연결 자가 진단 — 설정·게이트웨이 선언·규약·서버 연결·보관 큐를 ✓/✗ 로 점검하고 문제마다 처방을 제시한다. "팀 메시지가 안 와요" 류 문제의 1차 진단 도구.',
@@ -755,6 +770,32 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         return ok(`✓ 중계 서버를 ${url} 로 변경 — '${cfg.name}' 으로 접속 완료 (기존 토큰 유지)\n${formatRoster(welcome)}`)
       }
       return ok(`서버 주소를 ${url} 로 저장했습니다 — 지금은 연결되지 않아 백그라운드에서 자동 재시도합니다 (기존 토큰 유지)`)
+    }
+    case 'team_history': {
+      if (!wsReady) await connectWithConfig()
+      if (!wsReady) return ok('✗ 중계 서버에 연결돼 있지 않습니다 — /team-relay:join 으로 먼저 참가하세요')
+      const frame: Record<string, unknown> = { type: 'history' }
+      if (args.peer) frame.peer = args.peer
+      if (args.room) frame.room = args.room
+      if (args.thread) frame.thread = args.thread
+      if (args.limit && Number(args.limit) > 0) frame.limit = Number(args.limit)
+      if (args.before && Number(args.before) > 0) frame.before = Number(args.before)
+      const res = await request(frame)
+      if (res.type !== 'history') {
+        if (res.reason === 'history_disabled') return ok('✗ 이 서버는 감사 로그가 꺼져 있어 히스토리를 제공하지 않습니다')
+        return ok(`✗ 히스토리 조회 실패: ${String(res.detail ?? res.reason ?? res.type)}`)
+      }
+      const entries = (res.entries ?? []) as Array<{ ts: number; room: string; from: string; to: string; text: string; thread?: string; truncated?: boolean }>
+      if (entries.length === 0) return ok('조회 조건에 맞는 기록이 없습니다')
+      const lines = entries.map(e => {
+        const t = new Date(e.ts).toISOString().replace('T', ' ').slice(5, 16)
+        const tail = [e.thread ? `t:${e.thread}` : null, e.truncated ? '(잘림)' : null].filter(Boolean).join(' ')
+        return `  [${t}] [${e.room}] ${e.from} → ${e.to}: ${e.text}${tail ? ` ${tail}` : ''}`
+      })
+      if (res.more) {
+        lines.push(`  … 이전 기록이 더 있습니다 — before:${entries[0]!.ts} 로 이전 페이지를 조회할 수 있습니다`)
+      }
+      return ok([`팀 메시지 히스토리 (${entries.length}건):`, ...lines].join('\n'))
     }
     case 'team_doctor': {
       // 부분 실패 허용 — 서버가 죽어 있어도 로컬 점검 결과는 반드시 출력한다 (§5.1)

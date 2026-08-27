@@ -14,11 +14,13 @@
 많다. GitHub SSH 키가 등록된 머신이면 설치가 `kex_exchange_identification` / `port 22 timed out`
 로 실패하는데, 아래 한 줄이면 git 이 clone 을 HTTPS(443, 사내망에서 안 막힘)로 처리한다.
 설치 전에 미리 실행해두면 그 실패를 겪지 않는다 (SSH 키를 쓰든 안 쓰든 무해).
+
 ```bash
 git config --global url."https://github.com/".insteadOf "git@github.com:"
 ```
 
 **2) 플러그인 설치** — Claude Code 안에서:
+
 ```text
 /plugin marketplace add hohre12/jwbae-plugins     # 이미 있으면 생략
 /plugin install team-relay@jwbae-plugins
@@ -30,6 +32,7 @@ git config --global url."https://github.com/".insteadOf "git@github.com:"
 
 **3) alias 등록** — 셸 프로필(`~/.zshrc`)에 넣고 터미널 재시작. 팀 연결이 필요한 세션은
 `claude` 대신 `claude-team` 으로 켠다:
+
 ```bash
 # 기본 — 권한 프롬프트 정상 동작 (권장)
 alias claude-team='TEAM_RELAY_GATEWAY=1 claude --dangerously-load-development-channels plugin:team-relay@jwbae-plugins'
@@ -37,8 +40,9 @@ alias claude-team='TEAM_RELAY_GATEWAY=1 claude --dangerously-load-development-ch
 alias claude-team-yolo='TEAM_RELAY_GATEWAY=1 claude --dangerously-skip-permissions --dangerously-load-development-channels plugin:team-relay@jwbae-plugins'
 ```
 
-**4) 기동 + 참가** — `claude-team` 으로 세션을 켠다. 첫 1회만 확인 두 개(개발 채널 경고 →
+**4) 기동 + 참가** — `claude-team` 또는 `claude-team-yolo` 으로 세션을 켠다. 첫 1회만 확인 두 개(개발 채널 경고 →
 "I am using this for local development" 선택, 새 MCP 서버 → "Use this MCP server"). 그다음:
+
 ```text
 /team-relay:join <서버주소> <초대코드>
 ```
@@ -56,22 +60,30 @@ alias claude-team-yolo='TEAM_RELAY_GATEWAY=1 claude --dangerously-skip-permissio
 
 ## 사용법
 
-| 하고 싶은 것 | 방법 |
-|---|---|
-| 팀원에게 질문·전달 | 세션에 그냥 말하기: *"임규영에게 배포 일정 물어봐줘"* |
-| 연결 상태·온라인 팀원 확인 | `/team-relay:status` |
-| 답장 전 내 승인 받기 | `/team-relay:status auto-reply off` |
-| 질문 위임 규칙 등록 | `/team-relay:route add "kafka, 인프라" <내 다른 세션 이름>` |
+| 하고 싶은 것               | 방법                                                        |
+| -------------------------- | ----------------------------------------------------------- |
+| 팀원에게 질문·전달         | 세션에 그냥 말하기: _"임규영에게 배포 일정 물어봐줘"_       |
+| 연결 상태·팀원 확인        | `/team-relay:status` — 🟢온라인 ⚪오프라인 🌙퇴근 ⚠️무응답    |
+| **뭔가 안 될 때 1차 진단** | `/team-relay:doctor` — 설정·연결·수신 상태를 ✓/✗ + 처방으로 |
+| 퇴근/출근                  | `/team-relay:away on` (수신 보관·기한 정지) · `off` (보관분 배달 + 부재중 브리핑) |
+| 지난 대화 찾기             | _"규영이랑 주고받은 메시지 보여줘"_ (team_history — 내 문답만) |
+| 인터페이스 합의 기록       | _"방금 합의한 스키마 대장에 올려줘"_ — 상대 에이전트가 확인해야 확정, 같은 방 전원이 열람 |
+| 답장 전 내 승인 받기       | `/team-relay:status auto-reply off`                         |
+| 질문 위임 규칙 등록        | `/team-relay:route add "kafka, 인프라" <세션>` · 방 단위는 `add --room <방> <세션>` |
+| (방장만) 초대·추방·공지    | _"newbie 초대코드 발급해줘"_ / _"repoto 방에 공지 보내줘"_ (team_room — 방장 지정은 관리자) |
 
-- 상대가 오프라인이면 **72시간 보관** 후 접속 시 배달, 만료되면 나에게 통지된다.
+- 질문을 보냈는데 상대가 **15분간 무반응이면 "무응답" 알림**이 온다(한도 초과·자리 비움 등) — 기다릴지 다른 사람에게 물을지 판단 재료.
+- 상대가 오프라인이면 **72시간 보관** 후 접속 시 배달(퇴근 중엔 기한 정지), 만료되면 나에게 통지된다.
 - 답장에 커밋 전 정보가 섞이면 `[로컬 작업 기준 · 커밋 전]` 꼬리표가 자동으로 붙는다.
 - 팀원 메시지는 내 권한 승인을 대신할 수 없고, 설정 변경 요구는 거부된다.
 
-> **프라이버시 고지**: 팀 메시지(누가·언제·어떤 방에·무슨 내용)는 **팀 서버에 기록**됩니다.
-> 팀 협업 기록·감사 목적이며, 개인적인 내용은 이 채널로 주고받지 마세요.
+> **프라이버시 고지**: 팀 메시지(누가·언제·어떤 방에·무슨 내용·스레드)는 **팀 서버에 기록**됩니다.
+> 팀 협업 기록·감사 목적이며, 본인 문답은 히스토리로 조회할 수 있고(타인 대화는 불가),
+> 확정한 인터페이스 합의는 같은 방 전원에게 공개됩니다. 개인적인 내용은 이 채널로 주고받지 마세요.
 
 ## 잘 안 될 때
 
+- **먼저 `/team-relay:doctor`** — 설정·게이트웨이·연결·보관 큐를 자동 점검하고 ✗ 마다 처방을 알려준다. 아래는 doctor 로도 안 풀릴 때.
 - **설치가 `port 22 timed out`** → 설치 1) 의 `git config --global url."https://github.com/".insteadOf "git@github.com:"` 실행 후 재시도.
 - **`/team-relay:join` 이 없는 명령이라고 나옴** → 플러그인 미설치이거나 `claude-team` alias 없이 켰음.
 - **참가가 "연결할 수 없습니다"** → 관리자가 준 서버 주소가 맞는지, 회사 네트워크/VPN 에 연결돼 있는지 확인. 그래도 안 되면 관리자에게 문의.

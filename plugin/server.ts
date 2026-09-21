@@ -27,25 +27,56 @@ interface RouteEntry {
 
 interface Config {
   url: string // ws://host:port/ws
+  /** 이 머신의 신원 — 불변, 최초 join 1회 생성 (v2 §2) */
   token: string
-  name: string
+  /** 방 → 그 방에서의 내 라벨 (서버가 진실, 표시용 캐시) */
+  rooms?: Record<string, string>
+  /** 세션 id → 담당 방 목록 — --resume 시 담당이 복원된다 (v2 §2.2) */
+  sessions?: Record<string, string[]>
+  /** v1 호환 — 옛 설정의 단일 이름 (마이그레이션 후 rooms 로 승격) */
+  name?: string
   routes?: RouteEntry[] // 라우팅 등록표 (선택 — 미등록이어도 동작)
   autoReply?: boolean // 자동답장 토글 (기본 true)
+}
+
+/** 이 세션의 고유 id — Claude Code 가 플러그인 프로세스에 넘겨준다 (2026-09-21 실측) */
+const SESSION_ID = process.env.CLAUDE_CODE_SESSION_ID ?? ''
+/** 세션 바인딩 보관 상한 — 세션 id 가 무한 누적되지 않게 (v2 §3.2) */
+const SESSION_KEEP = 50
+
+/** 이 세션이 담당할 방 — 설정에 바인딩이 없으면, 소속 방이 하나뿐일 때만 자동 담당 */
+function myRooms(cfg: Config): string[] {
+  const bound = SESSION_ID ? cfg.sessions?.[SESSION_ID] : undefined
+  if (bound && bound.length) return bound
+  const all = Object.keys(cfg.rooms ?? {})
+  return all.length === 1 ? all : []
+}
+
+/** 이 세션의 담당 방을 설정에 기록 (LRU — 오래된 세션 항목부터 밀어낸다) */
+function bindRooms(cfg: Config, rooms: string[]): Config {
+  if (!SESSION_ID) return cfg
+  const sessions = { ...(cfg.sessions ?? {}), [SESSION_ID]: rooms }
+  const keys = Object.keys(sessions)
+  if (keys.length > SESSION_KEEP) for (const k of keys.slice(0, keys.length - SESSION_KEEP)) delete sessions[k]
+  return { ...cfg, sessions }
 }
 
 const CONFIG_PATH =
   process.env.TEAM_RELAY_CONFIG ?? join(homedir(), '.claude', 'channels', 'team-relay', 'config.json')
 
 /** 와이어 프로토콜 버전 — 서버의 MIN_PROTO 미만이면 plugin_outdated 로 거절된다 (v1 §2.1) */
-const PROTO = 1
+const PROTO = 2
 /** 플러그인 패키지 버전 — hello/join 에 동봉 (서버 로그·doctor 진단용) */
-const PLUGIN_VERSION = '0.5.0'
+const PLUGIN_VERSION = '0.6.0'
 /** 요청 응답 타임아웃 — 테스트에서 줄일 수 있게 env 로 노출 */
 const REQUEST_TIMEOUT_MS = Number(process.env.TEAM_RELAY_REQUEST_TIMEOUT_MS ?? 5000)
 
 function loadConfig(): Config | null {
   try {
-    return JSON.parse(readFileSync(CONFIG_PATH, 'utf8')) as Config
+    const cfg = JSON.parse(readFileSync(CONFIG_PATH, 'utf8')) as Config
+    // v1 → v2: 단일 이름을 rooms 맵으로 승격 (방 이름은 서버 welcome 이 채운다)
+    if (cfg.name && !cfg.rooms) cfg.rooms = {}
+    return cfg
   } catch {
     return null
   }
@@ -138,6 +169,34 @@ if (!protocolCache) {
     if (protocolCache) {
       try { saveProtocolCache(protocolCache) } catch { /* 캐시 실패는 기동을 막지 않는다 */ }
     }
+  }
+}
+
+/** 현재 이 세션이 잡은 담당 방 (welcome/room_ok 가 알려준 값) */
+let heldRooms: string[] = []
+
+/**
+ * welcome 반영 — 서버가 진실인 방·라벨을 로컬 캐시에 저장하고, 실제 담당(held)을 기록한다.
+ * 담당을 못 잡은 방(lost)이 있으면 사용자에게 알린다 (다른 세션이 가져간 상태를 조용히 두지 않는다).
+ */
+function applyWelcome(frame: RelayFrame): void {
+  const cfg = loadConfig()
+  if (!cfg) return
+  const rooms = (frame.rooms ?? {}) as Record<string, string>
+  heldRooms = ((frame.held as string[] | undefined) ?? []).slice()
+  const lost = (frame.lost as string[] | undefined) ?? []
+  let next: Config = { ...cfg, rooms }
+  delete next.name // v1 잔재 제거
+  if (heldRooms.length) next = bindRooms(next, heldRooms)
+  try { saveConfig(next) } catch { /* 저장 실패는 동작을 막지 않는다 */ }
+  if (lost.length) {
+    void mcp.notification({
+      method: 'notifications/claude/channel',
+      params: {
+        content: `[담당 실패] 다음 방은 이 세션이 수신을 맡지 못했습니다: ${lost.join(', ')} — 이미 참가한 방이면 team_room 으로 다시 담당할 수 있고(다른 세션이 잡고 있으면 그 세션이 수신을 잃습니다), 참가하지 않은 방이면 초대코드가 필요합니다.`,
+        meta: { kind: 'system' },
+      },
+    })
   }
 }
 
@@ -288,6 +347,19 @@ function handleFrame(frame: RelayFrame, sock?: WebSocket): void {
     void deliverExpired(frame)
     return
   }
+  // room_lost push — 다른 세션이 이 방 담당을 가져갔다 (v2)
+  if (frame.type === 'room_lost') {
+    const room = String(frame.room ?? '')
+    heldRooms = heldRooms.filter(r => r !== room)
+    void mcp.notification({
+      method: 'notifications/claude/channel',
+      params: {
+        content: `[수신 이전] '${room}' 방의 수신을 다른 세션이 가져갔습니다. 이 세션은 그 방 메시지를 더 이상 받지 않습니다. 이 세션에서 다시 받으려면 team_room 으로 담당을 되찾으세요(그러면 그 세션이 수신을 잃습니다).`,
+        meta: { kind: 'system', room },
+      },
+    })
+    return
+  }
   // noack push — 내 발신이 기한 내 응답을 못 받았다는 통지 (v1 §3.3)
   if (frame.type === 'noack') {
     void mcp.notification({
@@ -398,12 +470,16 @@ async function connectWithConfig(): Promise<RelayFrame | null> {
         return
       }
       ws = s
-      void request({ type: 'hello', v: PROTO, plugin: PLUGIN_VERSION, token: cfg.token, gateway: IS_GATEWAY }).then(
+      void request({
+        type: 'hello', v: PROTO, plugin: PLUGIN_VERSION, token: cfg.token, gateway: IS_GATEWAY,
+        session: SESSION_ID, rooms: IS_GATEWAY ? myRooms(cfg) : [],
+      }).then(
         frame => {
           if (frame.type === 'welcome') {
             wsReady = true
             reconnectDelay = 1000
             reconnectHalted = false
+            applyWelcome(frame)
             if (Number(frame.v) > PROTO) log(`서버 프로토콜(v${frame.v})이 플러그인(v${PROTO})보다 새 버전 — /plugin update 권장`)
             maybeUpdateProtocolCache(frame)
             log(`'${cfg.name}' 으로 접속 완료 (${cfg.url})`)
@@ -581,6 +657,17 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'team_room',
       description:
+        '이 세션이 담당할 방을 지정한다 (초대코드 불필요 — 이미 참가한 방 중에서). 새 세션에서 "어느 방 메시지를 받을지" 고르는 도구. --resume 으로 재시작하면 담당이 자동 복원되므로 보통은 쓸 일이 없다.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          rooms: { type: 'string', description: '담당할 방 이름 (여러 개면 쉼표로 구분). 생략하면 현재 담당·참가 방을 보여준다' },
+        },
+      },
+    },
+    {
+      name: 'team_owner',
+      description:
         '방장 전용 — 내가 방장인 방의 초대코드 발급(invite)·방 단위 추방(kick, 전역 차단 아님)·방 전원 공지(notice). 방장 지정은 서버 관리자가 한다.',
       inputSchema: {
         type: 'object',
@@ -690,13 +777,22 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       }
       const token = (joined.token as string | undefined) ?? existing?.token
       if (!token) return ok('✗ 서버가 토큰을 주지 않았고 기존 토큰도 없습니다 — 관리자에게 문의')
-      // 라우팅 등록표·자동답장 토글 등 로컬 설정은 재참가해도 보존한다
-      saveConfig({ ...(existing ?? {}), url, token, name: String(joined.name) })
+      // 라우팅 등록표·자동답장 토글 등 로컬 설정은 재참가해도 보존한다.
+      // v2: 토큰은 머신당 하나(불변), rooms 는 서버가 준 방→라벨, 이 세션은 새 방을 담당한다.
+      const joinedRooms = (joined.rooms ?? {}) as Record<string, string>
+      const newRoom = Object.keys(joinedRooms).find(r => !(existing?.rooms ?? {})[r]) ?? Object.keys(joinedRooms)[0]
+      let cfgNext: Config = { ...(existing ?? {}), url, token, rooms: joinedRooms }
+      delete cfgNext.name
+      if (newRoom) cfgNext = bindRooms(cfgNext, [newRoom])
+      saveConfig(cfgNext)
       // 후속 hello 실패는 참가 실패가 아니다 (리뷰 m2) — 초대코드는 이미 소모·토큰은 저장됨.
       // 원시 예외로 터뜨리면 사용자가 재발급을 요청하는 헛걸음을 하게 된다.
       let welcome: RelayFrame | null = null
       try {
-        welcome = await request({ type: 'hello', v: PROTO, plugin: PLUGIN_VERSION, token, gateway: IS_GATEWAY })
+        welcome = await request({
+          type: 'hello', v: PROTO, plugin: PLUGIN_VERSION, token, gateway: IS_GATEWAY,
+          session: SESSION_ID, rooms: newRoom ? [newRoom] : [],
+        })
       } catch {
         // hello 무응답 — 유령 소켓을 남기지 않고(리뷰 C1) 백그라운드 재시도로 넘긴다
         if (ws) {
@@ -707,16 +803,20 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         }
         scheduleReconnect()
       }
-      const rooms = (joined.rooms as string[]).join(', ')
       if (welcome?.type !== 'welcome') {
         return ok(
-          `✓ '${joined.name}' 으로 참가 완료 — 소속 방: ${rooms}. 토큰이 저장됐고 초대코드는 정상 소모됐으니 재발급은 필요 없습니다.\n` +
+          `✓ '${newRoom}' 방에 '${joined.name}' 으로 참가 완료. 토큰이 저장됐고 초대코드는 정상 소모됐으니 재발급은 필요 없습니다.\n` +
             '다만 접속 확인 응답이 아직 없어 백그라운드에서 자동 재시도합니다 — 세션 재시작으로도 해결됩니다.',
         )
       }
       wsReady = true
+      applyWelcome(welcome)
       maybeUpdateProtocolCache(welcome)
-      return ok(`✓ '${joined.name}' 으로 참가 완료 — 소속 방: ${rooms}\n${formatRoster(welcome)}\n이후 세션부터는 자동 접속됩니다.`)
+      return ok(
+        `✓ '${newRoom}' 방에 '${joined.name}' 으로 참가 완료\n` +
+          `  이 세션이 '${newRoom}' 담당입니다 (resume 하면 유지 · 새 세션은 team_room 으로 지정)\n` +
+          `  내 소속 방: ${Object.entries(joinedRooms).map(([r, l]) => `${r}(${l})`).join(', ')}\n${formatRoster(welcome)}`,
+      )
       } finally {
         joinInProgress = false
       }
@@ -818,7 +918,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       }
       return ok(`서버 주소를 ${url} 로 저장했습니다 — 지금은 연결되지 않아 백그라운드에서 자동 재시도합니다 (기존 토큰 유지)`)
     }
-    case 'team_room': {
+    case 'team_owner': {
       if (!wsReady) await connectWithConfig()
       if (!wsReady) return ok('✗ 중계 서버에 연결돼 있지 않습니다 — /team-relay:join 으로 먼저 참가하세요')
       const room = args.room ?? ''
@@ -856,6 +956,38 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         default:
           return ok(`✗ 알 수 없는 action: ${args.action ?? '(없음)'} — invite|kick|notice`)
       }
+    }
+    case 'team_room': {
+      const cfg = loadConfig()
+      if (!cfg) return ok('✗ 아직 팀에 참가하지 않았습니다 — /team-relay:join <서버주소> <초대코드>')
+      const joinedRooms = cfg.rooms ?? {}
+      if (!args.rooms) {
+        const lines = [
+          `이 세션 담당: ${heldRooms.length ? heldRooms.join(', ') : '(없음)'}`,
+          `참가 중인 방: ${Object.entries(joinedRooms).map(([r, l]) => `${r}(${l})`).join(', ') || '(없음)'}`,
+        ]
+        if (!heldRooms.length && Object.keys(joinedRooms).length > 1) {
+          lines.push('→ team_room(rooms:"<방>") 으로 이 세션이 받을 방을 지정하세요')
+        }
+        return ok(lines.join('\n'))
+      }
+      const wanted = args.rooms.split(',').map(r => r.trim()).filter(Boolean)
+      const notJoined = wanted.filter(r => !(r in joinedRooms))
+      if (notJoined.length) {
+        return ok(`✗ 참가하지 않은 방입니다: ${notJoined.join(', ')} — 관리자에게 초대코드를 받아 /team-relay:join 하세요`)
+      }
+      if (!wsReady) await connectWithConfig()
+      if (!wsReady) return ok('✗ 중계 서버에 연결돼 있지 않습니다 — 잠시 후 다시 시도하세요')
+      const res = await request({ type: 'room', rooms: wanted })
+      if (res.type !== 'room_ok') return ok(`✗ 담당 지정 실패: ${String(res.detail ?? res.reason ?? res.type)}`)
+      heldRooms = ((res.held as string[] | undefined) ?? []).slice()
+      const lost = (res.lost as string[] | undefined) ?? []
+      try { saveConfig(bindRooms(loadConfig() ?? cfg, heldRooms)) } catch { /* 저장 실패는 동작을 막지 않는다 */ }
+      return ok(
+        `✓ 이 세션 담당: ${heldRooms.map(r => `${r}(${joinedRooms[r]})`).join(', ') || '(없음)'}` +
+          (lost.length ? `\n⚠️ 담당 실패: ${lost.join(', ')}` : '') +
+          '\n이 담당은 --resume 으로 재시작하면 유지됩니다.',
+      )
     }
     case 'team_agree': {
       if (!wsReady) await connectWithConfig()
@@ -953,7 +1085,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       if (!cfg) {
         check(false, '설정', `없음 또는 파싱 불가 (${CONFIG_PATH})`, '/team-relay:join <서버주소> <초대코드> 로 참가하세요')
       } else {
-        check(true, '설정', `${cfg.name} @ ${cfg.url}`)
+        const labels = Object.entries(cfg.rooms ?? {}).map(([r, l]) => `${r}(${l})`).join(', ')
+        check(true, '설정', `${labels || '(참가한 방 없음)'} @ ${cfg.url}`)
         try {
           const mode = statSync(CONFIG_PATH).mode & 0o777
           check(mode === 0o600, '설정 권한', `0${mode.toString(8)}`, `chmod 600 ${CONFIG_PATH} 를 실행하세요 (토큰 보호)`)
@@ -983,6 +1116,16 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
               if (d.protocolRev !== null && d.protocolRev !== undefined) {
                 const same = protocolCache?.rev === Number(d.protocolRev)
                 check(same, '규약 rev', same ? `rev ${d.protocolRev} — 최신` : `서버 rev ${d.protocolRev} / 캐시 rev ${protocolCache?.rev ?? '없음'}`, '세션을 재시작하면 새 규약이 적용됩니다')
+              }
+              const dHeld = (d.held as string[] | undefined) ?? []
+              const dOther = (d.heldByOther as string[] | undefined) ?? []
+              const dRooms = (d.rooms ?? {}) as Record<string, string>
+              check(dHeld.length > 0 || Object.keys(dRooms).length === 0, '이 세션 담당 방',
+                dHeld.map(r => `${r}(${dRooms[r]})`).join(', ') || '(없음)',
+                'team_room(rooms:"<방>") 으로 이 세션이 받을 방을 지정하세요')
+              if (dOther.length) {
+                check(false, '수신 자격', `다른 세션이 가져간 방: ${dOther.join(', ')}`,
+                  '이 세션에서 받으려면 team_room 으로 되찾으세요 (그 세션은 수신을 잃습니다) — 세션당 방 하나를 권장')
               }
               if (d.away) lines.push('  🌙 퇴근 중 — 수신은 보관됩니다 (team_away mode:"off" 로 출근)')
               const q = Number(d.queueForMe ?? 0)
@@ -1018,11 +1161,19 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       if (!wsReady) await connectWithConfig()
       if (!wsReady) return ok(`✗ 중계 서버(${cfg.url}) 오프라인 — 내 이름: ${cfg.name}\n${gwLine}\n${autoLine}`)
       const st = await request({ type: 'status' })
+      const stRooms = (st.rooms ?? {}) as Record<string, string>
+      const stHeld = (st.held as string[] | undefined) ?? []
+      const stOther = (st.heldByOther as string[] | undefined) ?? []
+      const roomLine = `이 세션 담당: ${stHeld.map(r => `${r}(${stRooms[r]})`).join(', ') || '(없음)'}`
+      const otherLine = stOther.length
+        ? `⚠️ 다른 세션이 담당 중: ${stOther.join(', ')} — 이 세션에서 받으려면 team_room 으로 되찾으세요`
+        : null
+      const joinedLine = `참가 중인 방: ${Object.entries(stRooms).map(([r, l]) => `${r}(${l})`).join(', ')}`
       const awayLine = st.myAway
         ? '상태: 🌙 퇴근 중 — 수신은 보관되며(기한 정지), team_away(mode:"off") 로 출근하면 배달됩니다'
         : null
       return ok(
-        [`내 이름: ${st.name} · 연결됨 (${cfg.url})`, gwLine, autoLine, awayLine, formatRoster(st)]
+        [`연결됨 (${cfg.url})`, roomLine, joinedLine, otherLine, gwLine, autoLine, awayLine, formatRoster(st)]
           .filter(Boolean)
           .join('\n'),
       )

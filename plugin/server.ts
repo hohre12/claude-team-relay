@@ -67,7 +67,7 @@ const CONFIG_PATH =
 /** 와이어 프로토콜 버전 — 서버의 MIN_PROTO 미만이면 plugin_outdated 로 거절된다 (v1 §2.1) */
 const PROTO = 2
 /** 플러그인 패키지 버전 — hello/join 에 동봉 (서버 로그·doctor 진단용) */
-const PLUGIN_VERSION = '0.6.0'
+const PLUGIN_VERSION = '0.6.1'
 /** 요청 응답 타임아웃 — 테스트에서 줄일 수 있게 env 로 노출 */
 const REQUEST_TIMEOUT_MS = Number(process.env.TEAM_RELAY_REQUEST_TIMEOUT_MS ?? 5000)
 
@@ -188,12 +188,12 @@ function applyWelcome(frame: RelayFrame): void {
   let next: Config = { ...cfg, rooms }
   delete next.name // v1 잔재 제거
   if (heldRooms.length) next = bindRooms(next, heldRooms)
-  try { saveConfig(next) } catch { /* 저장 실패는 동작을 막지 않는다 */ }
+  try { saveConfig(next, { roomsFromServer: true }) } catch { /* 저장 실패는 동작을 막지 않는다 */ }
   if (lost.length) {
     void mcp.notification({
       method: 'notifications/claude/channel',
       params: {
-        content: `[담당 실패] 다음 방은 이 세션이 수신을 맡지 못했습니다: ${lost.join(', ')} — 이미 참가한 방이면 team_room 으로 다시 담당할 수 있고(다른 세션이 잡고 있으면 그 세션이 수신을 잃습니다), 참가하지 않은 방이면 초대코드가 필요합니다.`,
+        content: `[담당 실패] 다음 방은 이 세션이 수신을 맡지 못했습니다: ${lost.join(', ')} — 대개 다른 세션이 이미 그 방을 담당 중이기 때문입니다(세션 시작만으로는 남의 담당을 뺏지 않습니다). 이 세션으로 가져오려면 team_room 을 실행하세요 — 그때는 그 세션이 수신을 잃습니다. 참가하지 않은 방이라면 초대코드가 필요합니다.`,
         meta: { kind: 'system' },
       },
     })
@@ -215,10 +215,36 @@ function maybeUpdateProtocolCache(frame: RelayFrame): void {
   }
 }
 
-function saveConfig(cfg: Config): void {
+/**
+ * 설정 저장 — 원자적으로 쓰고, 디스크의 최신본과 병합한다.
+ *
+ * config.json 은 이 머신의 **모든 세션이 공유하는 단일 파일**이다. 통째로 덮어쓰면
+ *  ① 읽은 뒤 쓰기까지의 사이에 다른 세션이 적은 변경이 사라지고(특히 세션별 담당 기록),
+ *  ② 쓰는 도중 끊기면(절전·강제종료·디스크 부족) 반쪽 JSON 이 남아 토큰까지 유실된다.
+ * 그래서 두 가지를 지킨다:
+ *  · sessions — 담당 기록은 **내 세션 항목만** 쓴다. 남의 항목은 언제나 디스크가 진실.
+ *  · rooms    — 서버가 진실이다. 서버 응답으로 받은 값일 때만(roomsFromServer) 덮어쓰고,
+ *               아니면 디스크 값을 유지해 오래된 캐시가 최신본을 지우지 못하게 한다.
+ * 쓰기는 임시 파일 → rename. rename 은 원자적이라 "옛 내용" 아니면 "새 내용"만 존재한다.
+ */
+function saveConfig(cfg: Config, opts: { roomsFromServer?: boolean } = {}): void {
   mkdirSync(dirname(CONFIG_PATH), { recursive: true })
-  writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), { mode: 0o600 })
-  chmodSync(CONFIG_PATH, 0o600)
+  const disk = loadConfig()
+  const next: Config = { ...(disk ?? {}), ...cfg }
+  if (disk) {
+    const sessions: Record<string, string[]> = { ...(disk.sessions ?? {}) }
+    const mine = SESSION_ID ? cfg.sessions?.[SESSION_ID] : undefined
+    if (SESSION_ID && mine) { delete sessions[SESSION_ID]; sessions[SESSION_ID] = mine } // 항상 최신 = 맨 뒤
+    const keys = Object.keys(sessions)
+    if (keys.length > SESSION_KEEP) for (const k of keys.slice(0, keys.length - SESSION_KEEP)) delete sessions[k]
+    if (keys.length) next.sessions = sessions
+    if (!opts.roomsFromServer && disk.rooms) next.rooms = disk.rooms
+  }
+  if (opts.roomsFromServer) delete next.name // v1 잔재는 서버 진실을 받는 순간 정리
+  const tmp = CONFIG_PATH + '.tmp'
+  writeFileSync(tmp, JSON.stringify(next, null, 2), { mode: 0o600 })
+  chmodSync(tmp, 0o600)
+  renameSync(tmp, CONFIG_PATH)
 }
 
 /** "10.0.1.23:8765" · "ws://10.0.1.23:8765" · "ws://…/ws" 전부 정식 ws URL 로 */
@@ -784,7 +810,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       let cfgNext: Config = { ...(existing ?? {}), url, token, rooms: joinedRooms }
       delete cfgNext.name
       if (newRoom) cfgNext = bindRooms(cfgNext, [newRoom])
-      saveConfig(cfgNext)
+      saveConfig(cfgNext, { roomsFromServer: true })
       // 후속 hello 실패는 참가 실패가 아니다 (리뷰 m2) — 초대코드는 이미 소모·토큰은 저장됨.
       // 원시 예외로 터뜨리면 사용자가 재발급을 요청하는 헛걸음을 하게 된다.
       let welcome: RelayFrame | null = null
@@ -982,9 +1008,12 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       if (res.type !== 'room_ok') return ok(`✗ 담당 지정 실패: ${String(res.detail ?? res.reason ?? res.type)}`)
       heldRooms = ((res.held as string[] | undefined) ?? []).slice()
       const lost = (res.lost as string[] | undefined) ?? []
+      const stolen = (res.stolen as string[] | undefined) ?? []
       try { saveConfig(bindRooms(loadConfig() ?? cfg, heldRooms)) } catch { /* 저장 실패는 동작을 막지 않는다 */ }
       return ok(
         `✓ 이 세션 담당: ${heldRooms.map(r => `${r}(${joinedRooms[r]})`).join(', ') || '(없음)'}` +
+          // 뺏어온 방은 반드시 밝힌다 — 상대 세션은 조용히 수신을 잃는다
+          (stolen.length ? `\n↪ 다음 방의 수신을 다른 세션에서 가져왔습니다: ${stolen.join(', ')}` : '') +
           (lost.length ? `\n⚠️ 담당 실패: ${lost.join(', ')}` : '') +
           '\n이 담당은 --resume 으로 재시작하면 유지됩니다.',
       )
@@ -1124,8 +1153,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
                 dHeld.map(r => `${r}(${dRooms[r]})`).join(', ') || '(없음)',
                 'team_room(rooms:"<방>") 으로 이 세션이 받을 방을 지정하세요')
               if (dOther.length) {
-                check(false, '수신 자격', `다른 세션이 가져간 방: ${dOther.join(', ')}`,
-                  '이 세션에서 받으려면 team_room 으로 되찾으세요 (그 세션은 수신을 잃습니다) — 세션당 방 하나를 권장')
+                check(false, '수신 자격', `다른 세션이 담당 중인 방: ${dOther.join(', ')}`,
+                  '정상일 수 있습니다 — 그 방은 다른 세션이 받고 있습니다. 이 세션에서 받아야 한다면 team_room 으로 가져오세요 (그 세션은 수신을 잃습니다)')
               }
               if (d.away) lines.push('  🌙 퇴근 중 — 수신은 보관됩니다 (team_away mode:"off" 로 출근)')
               const q = Number(d.queueForMe ?? 0)

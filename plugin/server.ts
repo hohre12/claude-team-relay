@@ -24,7 +24,7 @@ import {
 import { PLUGIN_VERSION, PROTO } from './core/version'
 import { choiceLabel, classifyRooms, emptyRooms, renderRooms } from './core/rooms'
 import { addRoute, labelOf, removeRoute, renderRoutes } from './core/routes'
-import { type SessionState, writeState } from './core/state'
+import { type SessionState, sweepStaleStates, writeState } from './core/state'
 import WS from './core/ws'
 import { createClaudeHost } from './host/claude'
 import {
@@ -1205,6 +1205,7 @@ if (host.isGateway && loadConfig()) void connectWithConfig()
 const STATE_HEARTBEAT_MS = Number(process.env.TEAM_RELAY_STATE_HEARTBEAT_MS ?? 30_000)
 if (host.isGateway) {
   installStatusline() // 버전 무관 경로에 복사 — 업데이트해도 settings.json 을 고칠 필요가 없다
+  sweepStaleStates() // 끝난 세션의 상태 파일 정리
   exportState()
   /**
    * 담당 없음 넛지 — 아무 방도 받고 있지 않다는 사실을 **한 번** 알린다.

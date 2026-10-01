@@ -4,7 +4,17 @@
 # 이 스크립트는 **플러그인 프로세스와 완전히 독립**이다. 그래서 플러그인이 죽어 있어도
 # 그 사실을 보여줄 수 있다 — state.json 의 updatedAt 이 낡은 것이 곧 그 신호다.
 # 의존성 0 (jq 도 쓰지 않는다). 상태 파일이 없으면 조용히 아무것도 출력하지 않는다.
-STATE="${TEAM_RELAY_STATE:-$HOME/.claude/channels/team-relay/state.json}"
+# Claude Code 가 세션 정보를 JSON 으로 stdin 에 준다 — 그 안의 session_id 로 **이 세션의**
+# 상태 파일만 찾는다. 팀 채널을 쓰지 않는 세션에는 그 파일이 없으므로 아무것도 안 띄운다.
+DIR="${TEAM_RELAY_STATE_DIR:-$HOME/.claude/channels/team-relay}"
+if [ -n "$TEAM_RELAY_STATE" ]; then
+  STATE="$TEAM_RELAY_STATE"
+else
+  INPUT=$(cat 2>/dev/null)
+  SID=$(printf '%s' "$INPUT" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+  [ -n "$SID" ] || exit 0
+  STATE="$DIR/state-$SID.json"
+fi
 [ -f "$STATE" ] || exit 0
 
 RAW=$(cat "$STATE" 2>/dev/null) || exit 0

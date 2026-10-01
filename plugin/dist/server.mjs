@@ -17801,7 +17801,7 @@ var ServerResultSchema2 = union([
 ]);
 
 // server.ts
-import { chmodSync as chmodSync4, mkdirSync as mkdirSync4, readFileSync as readFileSync3, renameSync as renameSync4, statSync, writeFileSync as writeFileSync4 } from "fs";
+import { chmodSync as chmodSync4, mkdirSync as mkdirSync4, readFileSync as readFileSync3, renameSync as renameSync4, statSync as statSync2, writeFileSync as writeFileSync4 } from "fs";
 import { homedir as homedir3 } from "os";
 import { dirname as dirname5, join as join5 } from "path";
 
@@ -17817,7 +17817,7 @@ var CONFIG_PATH = process.env.TEAM_RELAY_CONFIG ?? join(homedir(), ".claude", "c
 
 // core/version.ts
 var PROTO = 2;
-var PLUGIN_VERSION = "0.7.1";
+var PLUGIN_VERSION = "0.7.2";
 
 // core/ws.ts
 var WS = globalThis.WebSocket ?? (await Promise.resolve().then(() => (init_wrapper(), exports_wrapper))).default;
@@ -17888,7 +17888,7 @@ function fetchProtocolOnce(cfg, timeoutMs) {
 
 // core/version.ts
 var PROTO2 = 2;
-var PLUGIN_VERSION2 = "0.7.1";
+var PLUGIN_VERSION2 = "0.7.2";
 
 // core/rooms.ts
 function classifyRooms(rooms, held, heldByOther) {
@@ -17946,16 +17946,38 @@ function renderRoutes(routes) {
 }
 
 // core/state.ts
-import { chmodSync as chmodSync2, mkdirSync as mkdirSync2, renameSync as renameSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { chmodSync as chmodSync2, mkdirSync as mkdirSync2, readdirSync, renameSync as renameSync2, statSync, unlinkSync, writeFileSync as writeFileSync2 } from "node:fs";
 import { dirname as dirname3, join as join3 } from "node:path";
-var STATE_PATH = join3(dirname3(CONFIG_PATH), "state.json");
-function writeState(s) {
+var STATE_DIR = dirname3(CONFIG_PATH);
+function statePath(sessionId) {
+  return join3(STATE_DIR, `state-${sessionId.replace(/[^A-Za-z0-9_-]/g, "")}.json`);
+}
+function sweepStaleStates(maxAgeMs = 24 * 60 * 60 * 1000, now = Date.now()) {
   try {
-    mkdirSync2(dirname3(STATE_PATH), { recursive: true });
-    const tmp = `${STATE_PATH}.${process.pid}.tmp`;
+    for (const f of readdirSync(STATE_DIR)) {
+      if (!/^state-.*\.json$/.test(f))
+        continue;
+      const full = join3(STATE_DIR, f);
+      if (now - statSync(full).mtimeMs > maxAgeMs)
+        unlinkSync(full);
+    }
+    try {
+      unlinkSync(join3(STATE_DIR, "state.json"));
+    } catch {}
+  } catch {}
+}
+function writeState(s) {
+  if (!s.sessionId)
+    return;
+  if (!s.gateway)
+    return;
+  try {
+    const path = statePath(s.sessionId);
+    mkdirSync2(STATE_DIR, { recursive: true });
+    const tmp = `${path}.${process.pid}.tmp`;
     writeFileSync2(tmp, JSON.stringify(s, null, 2), { mode: 384 });
-    renameSync2(tmp, STATE_PATH);
-    chmodSync2(STATE_PATH, 384);
+    renameSync2(tmp, path);
+    chmodSync2(path, 384);
   } catch {}
 }
 
@@ -19027,7 +19049,7 @@ ${renderRooms(list)}`;
         const labels = Object.entries(cfg.rooms ?? {}).map(([r, l]) => `${r}(${l})`).join(", ");
         check(true, "\uC124\uC815", `${labels || "(\uCC38\uAC00\uD55C \uBC29 \uC5C6\uC74C)"} @ ${cfg.url}`);
         try {
-          const mode = statSync(CONFIG_PATH2).mode & 511;
+          const mode = statSync2(CONFIG_PATH2).mode & 511;
           check(mode === 384, "\uC124\uC815 \uAD8C\uD55C", `0${mode.toString(8)}`, `chmod 600 ${CONFIG_PATH2} \uB97C \uC2E4\uD589\uD558\uC138\uC694 (\uD1A0\uD070 \uBCF4\uD638)`);
         } catch {}
       }
@@ -19164,6 +19186,7 @@ if (host.isGateway && loadConfig())
 var STATE_HEARTBEAT_MS = Number(process.env.TEAM_RELAY_STATE_HEARTBEAT_MS ?? 30000);
 if (host.isGateway) {
   installStatusline();
+  sweepStaleStates();
   exportState();
   const NUDGE_DELAY_MS = Number(process.env.TEAM_RELAY_NUDGE_DELAY_MS ?? 4000);
   const nudge = setTimeout(async () => {

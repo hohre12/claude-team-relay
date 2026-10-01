@@ -21,6 +21,7 @@ import {
   FALLBACK_INSTRUCTIONS, PROTOCOL_TIMEOUT_MS, fetchProtocolOnce, loadProtocolCache, saveProtocolCache,
 } from './core/protocol'
 import { PLUGIN_VERSION, PROTO } from './core/version'
+import { addRoute, labelOf, removeRoute, renderRoutes } from './core/routes'
 import { createClaudeHost } from './host/claude'
 import {
   CONFIG_PATH, bindRooms, loadConfig, myRooms, normalizeUrl, saveConfig,
@@ -708,31 +709,25 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       const cfg = loadConfig()
       if (!cfg) return ok('✗ 아직 팀에 참가하지 않았습니다 — /team-relay:join 으로 먼저 참가하세요')
       const routes = cfg.routes ?? []
-      const label = (r: RouteEntry): string =>
-        r.room ? `[방 ${r.room}] → ${r.session}` : `"${r.keywords}" → ${r.session}`
       switch (args.action) {
         case 'list': {
-          if (routes.length === 0) return ok('라우팅 등록표가 비어 있습니다 — team_route(action:"add") 로 등록할 수 있습니다')
-          return ok(['라우팅 등록표 (방 바인딩이 키워드보다 우선):', ...routes.map(r => `  ${label(r)}`)].join('\n'))
+          const rendered = renderRoutes(routes)
+          if (!rendered) return ok('라우팅 등록표가 비어 있습니다 — team_route(action:"add") 로 등록할 수 있습니다')
+          return ok(rendered)
         }
         case 'add': {
           if ((!args.keywords && !args.room) || !args.session) {
             return ok('✗ add 에는 session 과 함께 keywords 또는 room 중 하나 이상이 필요합니다')
           }
-          // 같은 키워드/같은 방의 기존 항목은 새 세션으로 교체 (중복 누적 방지)
-          const rest = routes.filter(r => !(args.keywords && r.keywords === args.keywords) && !(args.room && r.room === args.room))
-          const replaced = rest.length !== routes.length
-          const entry: RouteEntry = { session: args.session }
-          if (args.keywords) entry.keywords = args.keywords
-          if (args.room) entry.room = args.room
-          saveConfig({ ...cfg, routes: [...rest, entry] })
-          return ok(`✓ 등록${replaced ? ' (기존 항목 교체)' : ''}: ${label(entry)}`)
+          const r = addRoute(routes, args.session, args.keywords, args.room)
+          saveConfig({ ...cfg, routes: r.routes })
+          return ok(`✓ 등록${r.replaced ? ' (기존 항목 교체)' : ''}: ${labelOf(r.entry)}`)
         }
         case 'remove': {
           if (!args.keywords && !args.room) return ok('✗ remove 에는 keywords 또는 room 이 필요합니다')
-          const rest = routes.filter(r => !(args.keywords && r.keywords === args.keywords) && !(args.room && r.room === args.room))
-          if (rest.length === routes.length) return ok(`✗ 해당 등록 항목이 없습니다 (action:"list" 로 확인)`)
-          saveConfig({ ...cfg, routes: rest })
+          const r = removeRoute(routes, args.keywords, args.room)
+          if (!r.removed) return ok(`✗ 해당 등록 항목이 없습니다 (action:"list" 로 확인)`)
+          saveConfig({ ...cfg, routes: r.routes })
           return ok(`✓ 제거: ${args.room ? `[방 ${args.room}]` : `"${args.keywords}"`}`)
         }
         default:

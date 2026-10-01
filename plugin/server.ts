@@ -190,13 +190,10 @@ function applyWelcome(frame: RelayFrame): void {
   if (heldRooms.length) next = bindRooms(next, heldRooms)
   try { saveConfig(next, { roomsFromServer: true }) } catch { /* 저장 실패는 동작을 막지 않는다 */ }
   if (lost.length) {
-    void mcp.notification({
-      method: 'notifications/claude/channel',
-      params: {
-        content: `[담당 실패] 다음 방은 이 세션이 수신을 맡지 못했습니다: ${lost.join(', ')} — 대개 다른 세션이 이미 그 방을 담당 중이기 때문입니다(세션 시작만으로는 남의 담당을 뺏지 않습니다). 이 세션으로 가져오려면 team_room 을 실행하세요 — 그때는 그 세션이 수신을 잃습니다. 참가하지 않은 방이라면 초대코드가 필요합니다.`,
-        meta: { kind: 'system' },
-      },
-    })
+    void notifyUser(
+      `[담당 실패] 다음 방은 이 세션이 수신을 맡지 못했습니다: ${lost.join(', ')} — 대개 다른 세션이 이미 그 방을 담당 중이기 때문입니다(세션 시작만으로는 남의 담당을 뺏지 않습니다). 이 세션으로 가져오려면 team_room 을 실행하세요 — 그때는 그 세션이 수신을 잃습니다. 참가하지 않은 방이라면 초대코드가 필요합니다.`,
+      { kind: 'system' },
+    )
   }
 }
 
@@ -318,6 +315,20 @@ function log(msg: string): void {
   process.stderr.write(`team-relay: ${msg}\n`)
 }
 
+/**
+ * 사용자·모델에게 보이는 **유일한 출구**.
+ *
+ * Claude Code 결합(`notifications/claude/channel`)을 이 한 곳에 모은다. 다른 호스트를
+ * 지원하게 되면 이 함수의 구현만 갈아끼우면 되고, 호출부는 손대지 않는다.
+ * (v0.7 §3.1 MCP 코어 분리의 선행 조치 — 호스트 경계선을 미리 긋는다)
+ */
+function notifyUser(content: string, meta: Record<string, string> = {}): Promise<void> {
+  return mcp.notification({
+    method: 'notifications/claude/channel',
+    params: { content, meta },
+  })
+}
+
 async function deliverToSession(frame: RelayFrame): Promise<void> {
   const meta: Record<string, string> = {
     from: String(frame.from ?? ''),
@@ -333,10 +344,7 @@ async function deliverToSession(frame: RelayFrame): Promise<void> {
   if (frame.agree) meta.agree = String(frame.agree)
   // 서버발 시스템 통지(from=_system)는 팀원 메시지와 구분되도록 표식을 붙인다
   if (frame.from === '_system') meta.kind = 'system'
-  await mcp.notification({
-    method: 'notifications/claude/channel',
-    params: { content: String(frame.text ?? ''), meta },
-  })
+  await notifyUser(String(frame.text ?? ''), meta)
 }
 
 /** 게이트웨이 상실(replaced/revoke) 통지 — 자동 재접속은 하지 않는다 */
@@ -345,22 +353,16 @@ async function notifyGatewayLost(reason: string): Promise<void> {
     reason === 'revoked'
       ? '[팀 연결 종료] 관리자가 이 계정의 접속을 차단했습니다. 팀 메시지 수신·발신이 중단됩니다.'
       : '[팀 수신 이전] 다른 claude-team 세션이 팀 수신(게이트웨이)을 가져갔습니다. 이 세션은 더 이상 팀 메시지를 받지 않습니다. 이 세션에서 다시 받으려면 /team-relay:status 를 실행하세요(그러면 다른 세션이 수신을 잃습니다). 세션은 하나만 게이트웨이로 두는 것을 권장합니다.'
-  await mcp.notification({
-    method: 'notifications/claude/channel',
-    params: { content: text, meta: { kind: 'system' } },
-  })
+  await notifyUser(text, { kind: 'system' })
 }
 
 /** 보관 만료 통지 렌더 — 조용한 증발 금지. meta 키는 식별자만(하이픈 금지). */
 async function deliverExpired(frame: RelayFrame): Promise<void> {
   const to = String(frame.to ?? '')
-  await mcp.notification({
-    method: 'notifications/claude/channel',
-    params: {
-      content: `[보관 만료] ${to} 에게 보낸 메시지가 기한 내 배달되지 못해 폐기되었습니다: ${String(frame.preview ?? '')}`,
-      meta: { kind: 'expired', to, room: String(frame.room ?? '') },
-    },
-  })
+  await notifyUser(
+    `[보관 만료] ${to} 에게 보낸 메시지가 기한 내 배달되지 못해 폐기되었습니다: ${String(frame.preview ?? '')}`,
+    { kind: 'expired', to, room: String(frame.room ?? '') },
+  )
 }
 
 function handleFrame(frame: RelayFrame, sock?: WebSocket): void {
@@ -377,24 +379,18 @@ function handleFrame(frame: RelayFrame, sock?: WebSocket): void {
   if (frame.type === 'room_lost') {
     const room = String(frame.room ?? '')
     heldRooms = heldRooms.filter(r => r !== room)
-    void mcp.notification({
-      method: 'notifications/claude/channel',
-      params: {
-        content: `[수신 이전] '${room}' 방의 수신을 다른 세션이 가져갔습니다. 이 세션은 그 방 메시지를 더 이상 받지 않습니다. 이 세션에서 다시 받으려면 team_room 으로 담당을 되찾으세요(그러면 그 세션이 수신을 잃습니다).`,
-        meta: { kind: 'system', room },
-      },
-    })
+    void notifyUser(
+      `[수신 이전] '${room}' 방의 수신을 다른 세션이 가져갔습니다. 이 세션은 그 방 메시지를 더 이상 받지 않습니다. 이 세션에서 다시 받으려면 team_room 으로 담당을 되찾으세요(그러면 그 세션이 수신을 잃습니다).`,
+      { kind: 'system', room },
+    )
     return
   }
   // noack push — 내 발신이 기한 내 응답을 못 받았다는 통지 (v1 §3.3)
   if (frame.type === 'noack') {
-    void mcp.notification({
-      method: 'notifications/claude/channel',
-      params: {
-        content: `[무응답] ${String(frame.to ?? '')}이(가) 아직 답하지 않았습니다 — 세션이 한도 초과·장기 작업·자리 비움 상태일 수 있습니다. 기다릴지, 다른 사람에게 물을지 사용자에게 알려 판단을 받아라. 재발신을 자의로 반복하지 마라.`,
-        meta: { kind: 'noack', to: String(frame.to ?? ''), room: String(frame.room ?? ''), thread: String(frame.thread ?? '') },
-      },
-    })
+    void notifyUser(
+      `[무응답] ${String(frame.to ?? '')}이(가) 아직 답하지 않았습니다 — 세션이 한도 초과·장기 작업·자리 비움 상태일 수 있습니다. 기다릴지, 다른 사람에게 물을지 사용자에게 알려 판단을 받아라. 재발신을 자의로 반복하지 마라.`,
+      { kind: 'noack', to: String(frame.to ?? ''), room: String(frame.room ?? ''), thread: String(frame.thread ?? '') },
+    )
     return
   }
   // 게이트웨이 박탈(replaced)·차단(revoked) — 재접속하지 않고(핑퐁 방지) 사용자에게 알린다

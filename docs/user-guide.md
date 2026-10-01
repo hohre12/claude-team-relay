@@ -7,8 +7,9 @@
 
 ## 설치 (최초 1회, 약 2분)
 
-사전 요구: macOS/Linux · Claude Code v2.1.224+ · [Bun](https://bun.sh)
-(`bun --version` 안 되면 설치; 첫 기동 시 의존성 자동 설치를 위해 인터넷 필요).
+사전 요구: macOS/Linux · Claude Code v2.1.224+ **그게 전부다.**
+(v0.7부터 플러그인이 의존성을 동봉한 단일 파일로 배포되어 Bun 설치도, 첫 기동 시
+인터넷도 필요 없다. Node 가 있으면 Node 로, 없고 Bun 만 있으면 Bun 으로 돈다.)
 
 **1) (사내망 사용자 권장) GitHub HTTPS 강제** — 사내망은 GitHub SSH(22번 포트)를 막는 경우가
 많다. GitHub SSH 키가 등록된 머신이면 설치가 `kex_exchange_identification` / `port 22 timed out`

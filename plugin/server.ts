@@ -22,10 +22,14 @@ import {
 } from './core/protocol'
 import { PLUGIN_VERSION, PROTO } from './core/version'
 import { addRoute, labelOf, removeRoute, renderRoutes } from './core/routes'
+import WS from './core/ws'
 import { createClaudeHost } from './host/claude'
 import {
   CONFIG_PATH, bindRooms, loadConfig, myRooms, normalizeUrl, saveConfig,
 } from './core/config'
+
+/** 이 파일(또는 번들)이 놓인 자리 — package.json 대조에 쓴다 */
+const PKG_DIR = new URL('.', import.meta.url).pathname
 
 /** 요청 응답 타임아웃 — 테스트에서 줄일 수 있게 env 로 노출 */
 const REQUEST_TIMEOUT_MS = Number(process.env.TEAM_RELAY_REQUEST_TIMEOUT_MS ?? 5000)
@@ -238,7 +242,7 @@ function handleFrame(frame: RelayFrame, sock?: WebSocket): void {
 }
 
 function openSocket(url: string, onOpen: (sock: WebSocket) => void): WebSocket {
-  const sock = new WebSocket(url)
+  const sock = new WS(url)
   sock.addEventListener('open', () => onOpen(sock))
   sock.addEventListener('message', ev => {
     try {
@@ -932,6 +936,21 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         '팀 메시지를 받으려면 claude 대신 claude-team 으로 세션을 켜세요 (의도된 발신 전용 세션이면 정상)',
       )
       check(true, '런타임', `${host.runtime} · 플러그인 v${PLUGIN_VERSION} · 프로토콜 v${PROTO}`)
+      // 번들 배포본은 빌드 산출물이라, 리빌드를 빠뜨리면 소스와 조용히 어긋난다 (v0.7 §3.2 리스크)
+      // 소스 실행은 plugin/, 번들 실행은 plugin/dist/ 에서 돌므로 두 자리를 모두 본다
+      const pkgVersion = ((): string | null => {
+        for (const dir of [PKG_DIR, dirname(PKG_DIR.replace(/\/$/, ''))]) {
+          try {
+            const v = (JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { version?: string }).version
+            if (v) return v
+          } catch { /* 다음 자리 */ }
+        }
+        return null
+      })()
+      if (pkgVersion && pkgVersion !== PLUGIN_VERSION) {
+        check(false, '번들 신선도', `번들 v${PLUGIN_VERSION} ≠ 패키지 v${pkgVersion}`,
+          '배포본이 소스보다 낡았습니다 — 관리자에게 알리세요 (bun run build 누락)')
+      }
       check(
         !!protocolCache,
         '규약',

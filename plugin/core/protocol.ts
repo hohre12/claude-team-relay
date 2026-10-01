@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path'
 import { CONFIG_PATH } from './config'
 import type { Config, ProtocolCache, RelayFrame } from './types'
 import { PLUGIN_VERSION, PROTO } from './version'
+import WS from './ws'
 
 // ── thin client: 대화 규약은 서버가 배포한다 (v1 §2.4) ─────
 // MCP instructions 는 세션 기동 시 1회 주입되고 핫스왑이 안 된다. 그래서:
@@ -58,7 +59,7 @@ export function fetchProtocolOnce(cfg: Config, timeoutMs: number): Promise<Proto
     }
     const t = setTimeout(() => finish(null), timeoutMs)
     try {
-      sock = new WebSocket(cfg.url)
+      sock = new WS(cfg.url)
     } catch {
       finish(null)
       return

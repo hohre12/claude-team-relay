@@ -31,8 +31,36 @@ import {
   CONFIG_PATH, bindRooms, loadConfig, myRooms, normalizeUrl, saveConfig,
 } from './core/config'
 
-/** 이 파일(또는 번들)이 놓인 자리 — package.json 대조에 쓴다 */
+/** 이 파일(또는 번들)이 놓인 자리 — 소스는 plugin/, 번들은 plugin/dist/ */
 const PKG_DIR = new URL('.', import.meta.url).pathname
+/** plugin/ 루트 — 번들이면 한 단계 위다 */
+const PLUGIN_DIR = /\/dist\/?$/.test(PKG_DIR) ? dirname(PKG_DIR.replace(/\/$/, '')) : PKG_DIR.replace(/\/$/, '')
+
+/**
+ * 상태줄 스크립트의 **고정 경로**.
+ *
+ * 설치본 경로에는 버전이 들어간다(…/team-relay/0.7.0/plugin/…). 그 경로를 settings.json 에
+ * 넣으면 **업데이트할 때마다 설정을 고쳐야 한다**. 그래서 기동할 때마다 설정 폴더로
+ * 복사해 두고, 사용자는 버전이 없는 이 경로만 한 번 등록한다.
+ */
+const STATUSLINE_PATH = join(dirname(CONFIG_PATH), 'statusline.sh')
+
+function installStatusline(): void {
+  try {
+    const src = join(PLUGIN_DIR, 'statusline.sh')
+    const body = readFileSync(src, 'utf8')
+    let current: string | null = null
+    try { current = readFileSync(STATUSLINE_PATH, 'utf8') } catch { /* 처음 */ }
+    if (current === body) return // 같은 내용이면 건드리지 않는다
+    mkdirSync(dirname(STATUSLINE_PATH), { recursive: true })
+    const tmp = `${STATUSLINE_PATH}.${process.pid}.tmp`
+    writeFileSync(tmp, body, { mode: 0o755 })
+    renameSync(tmp, STATUSLINE_PATH)
+    chmodSync(STATUSLINE_PATH, 0o755)
+  } catch {
+    /* 설치 실패가 팀 채널 동작을 막아선 안 된다 — doctor 가 미설정으로 안내한다 */
+  }
+}
 
 /** 요청 응답 타임아웃 — 테스트에서 줄일 수 있게 env 로 노출 */
 const REQUEST_TIMEOUT_MS = Number(process.env.TEAM_RELAY_REQUEST_TIMEOUT_MS ?? 5000)
@@ -1032,15 +1060,17 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
           '배포본이 소스보다 낡았습니다 — 관리자에게 알리세요 (bun run build 누락)')
       }
       // 상태줄은 플러그인이 죽어도 보이는 유일한 창구다 — 미설정을 조용히 두지 않는다 (v0.7 §3.3)
-      const slPath = join(PKG_DIR.replace(/\/dist\/?$/, '/').replace(/\/$/, ''), 'statusline.sh')
-      const slRegistered = ((): boolean => {
-        try {
-          const raw = readFileSync(join(homedir(), '.claude', 'settings.json'), 'utf8')
-          return /"statusLine"/.test(raw) && /team-relay/.test(raw)
-        } catch { return false }
+      const settingsRaw = ((): string | null => {
+        try { return readFileSync(join(homedir(), '.claude', 'settings.json'), 'utf8') } catch { return null }
       })()
+      const slRegistered = !!settingsRaw && /"statusLine"/.test(settingsRaw) && /team-relay/.test(settingsRaw)
       check(slRegistered, '상태줄(statusline)', slRegistered ? '등록됨' : '미설정',
-        `~/.claude/settings.json 에 아래를 넣고 Claude Code 를 재시작하세요 — 팀 연결이 끊겨도 상태줄이 알려줍니다:\n     "statusLine": { "type": "command", "command": "${slPath}" }`)
+        `~/.claude/settings.json 에 아래를 넣고 Claude Code 를 재시작하세요 — 팀 연결이 끊겨도 상태줄이 알려줍니다:\n     "statusLine": { "type": "command", "command": "${STATUSLINE_PATH}" }`)
+      // 설치본 경로에는 버전이 들어간다 — 그 경로를 박아두면 업데이트할 때마다 깨진다
+      if (slRegistered && /plugins\/cache\//.test(settingsRaw!)) {
+        check(false, '상태줄 경로', '버전이 박힌 설치본 경로',
+          `플러그인을 업데이트하면 그 경로가 사라집니다. 아래 **고정 경로**로 바꾸세요:\n     "command": "${STATUSLINE_PATH}"`)
+      }
       check(
         !!protocolCache,
         '규약',
@@ -1166,6 +1196,7 @@ if (host.isGateway && loadConfig()) void connectWithConfig()
  */
 const STATE_HEARTBEAT_MS = Number(process.env.TEAM_RELAY_STATE_HEARTBEAT_MS ?? 30_000)
 if (host.isGateway) {
+  installStatusline() // 버전 무관 경로에 복사 — 업데이트해도 settings.json 을 고칠 필요가 없다
   exportState()
   /**
    * 담당 없음 넛지 — 아무 방도 받고 있지 않다는 사실을 **한 번** 알린다.

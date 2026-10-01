@@ -17801,7 +17801,7 @@ var ServerResultSchema2 = union([
 ]);
 
 // server.ts
-import { readFileSync as readFileSync3, statSync } from "fs";
+import { chmodSync as chmodSync4, mkdirSync as mkdirSync4, readFileSync as readFileSync3, renameSync as renameSync4, statSync, writeFileSync as writeFileSync4 } from "fs";
 import { homedir as homedir3 } from "os";
 import { dirname as dirname5, join as join5 } from "path";
 
@@ -18078,6 +18078,25 @@ function normalizeUrl(address) {
 
 // server.ts
 var PKG_DIR = new URL(".", import.meta.url).pathname;
+var PLUGIN_DIR = /\/dist\/?$/.test(PKG_DIR) ? dirname5(PKG_DIR.replace(/\/$/, "")) : PKG_DIR.replace(/\/$/, "");
+var STATUSLINE_PATH = join5(dirname5(CONFIG_PATH2), "statusline.sh");
+function installStatusline() {
+  try {
+    const src = join5(PLUGIN_DIR, "statusline.sh");
+    const body = readFileSync3(src, "utf8");
+    let current = null;
+    try {
+      current = readFileSync3(STATUSLINE_PATH, "utf8");
+    } catch {}
+    if (current === body)
+      return;
+    mkdirSync4(dirname5(STATUSLINE_PATH), { recursive: true });
+    const tmp = `${STATUSLINE_PATH}.${process.pid}.tmp`;
+    writeFileSync4(tmp, body, { mode: 493 });
+    renameSync4(tmp, STATUSLINE_PATH);
+    chmodSync4(STATUSLINE_PATH, 493);
+  } catch {}
+}
 var REQUEST_TIMEOUT_MS = Number(process.env.TEAM_RELAY_REQUEST_TIMEOUT_MS ?? 5000);
 var protocolCache = loadProtocolCache();
 if (!protocolCache) {
@@ -19026,17 +19045,20 @@ ${renderRooms(list)}`;
       if (pkgVersion && pkgVersion !== PLUGIN_VERSION2) {
         check(false, "\uBC88\uB4E4 \uC2E0\uC120\uB3C4", `\uBC88\uB4E4 v${PLUGIN_VERSION2} \u2260 \uD328\uD0A4\uC9C0 v${pkgVersion}`, "\uBC30\uD3EC\uBCF8\uC774 \uC18C\uC2A4\uBCF4\uB2E4 \uB0A1\uC558\uC2B5\uB2C8\uB2E4 \u2014 \uAD00\uB9AC\uC790\uC5D0\uAC8C \uC54C\uB9AC\uC138\uC694 (bun run build \uB204\uB77D)");
       }
-      const slPath = join5(PKG_DIR.replace(/\/dist\/?$/, "/").replace(/\/$/, ""), "statusline.sh");
-      const slRegistered = (() => {
+      const settingsRaw = (() => {
         try {
-          const raw = readFileSync3(join5(homedir3(), ".claude", "settings.json"), "utf8");
-          return /"statusLine"/.test(raw) && /team-relay/.test(raw);
+          return readFileSync3(join5(homedir3(), ".claude", "settings.json"), "utf8");
         } catch {
-          return false;
+          return null;
         }
       })();
+      const slRegistered = !!settingsRaw && /"statusLine"/.test(settingsRaw) && /team-relay/.test(settingsRaw);
       check(slRegistered, "\uC0C1\uD0DC\uC904(statusline)", slRegistered ? "\uB4F1\uB85D\uB428" : "\uBBF8\uC124\uC815", `~/.claude/settings.json \uC5D0 \uC544\uB798\uB97C \uB123\uACE0 Claude Code \uB97C \uC7AC\uC2DC\uC791\uD558\uC138\uC694 \u2014 \uD300 \uC5F0\uACB0\uC774 \uB04A\uACA8\uB3C4 \uC0C1\uD0DC\uC904\uC774 \uC54C\uB824\uC90D\uB2C8\uB2E4:
-     "statusLine": { "type": "command", "command": "${slPath}" }`);
+     "statusLine": { "type": "command", "command": "${STATUSLINE_PATH}" }`);
+      if (slRegistered && /plugins\/cache\//.test(settingsRaw)) {
+        check(false, "\uC0C1\uD0DC\uC904 \uACBD\uB85C", "\uBC84\uC804\uC774 \uBC15\uD78C \uC124\uCE58\uBCF8 \uACBD\uB85C", `\uD50C\uB7EC\uADF8\uC778\uC744 \uC5C5\uB370\uC774\uD2B8\uD558\uBA74 \uADF8 \uACBD\uB85C\uAC00 \uC0AC\uB77C\uC9D1\uB2C8\uB2E4. \uC544\uB798 **\uACE0\uC815 \uACBD\uB85C**\uB85C \uBC14\uAFB8\uC138\uC694:
+     "command": "${STATUSLINE_PATH}"`);
+      }
       check(!!protocolCache, "\uADDC\uC57D", protocolCache ? `rev ${protocolCache.rev} (\uCE90\uC2DC)` : "\uCE90\uC2DC \uC5C6\uC74C \u2014 \uB0B4\uC7A5 \uCD5C\uC18C \uD3F4\uBC31\uC73C\uB85C \uB3D9\uC791 \uC911", "\uC11C\uBC84 \uC811\uC18D \uD6C4 \uC138\uC158\uC744 \uC7AC\uC2DC\uC791\uD558\uBA74 \uC804\uCCB4 \uADDC\uC57D\uC774 \uC801\uC6A9\uB429\uB2C8\uB2E4");
       if (cfg) {
         if (!wsReady)
@@ -19140,6 +19162,7 @@ if (host.isGateway && loadConfig())
   connectWithConfig();
 var STATE_HEARTBEAT_MS = Number(process.env.TEAM_RELAY_STATE_HEARTBEAT_MS ?? 30000);
 if (host.isGateway) {
+  installStatusline();
   exportState();
   const NUDGE_DELAY_MS = Number(process.env.TEAM_RELAY_NUDGE_DELAY_MS ?? 4000);
   const nudge = setTimeout(async () => {

@@ -54,10 +54,12 @@ alias claude-team-yolo='TEAM_RELAY_GATEWAY=1 claude --dangerously-skip-permissio
 
 ```jsonc
 { "statusLine": { "type": "command",
-    "command": "~/.claude/plugins/cache/jwbae-plugins/team-relay/plugin/statusline.sh" } }
+    "command": "/Users/<나>/.claude/channels/team-relay/statusline.sh" } }
 ```
 
-정확한 경로는 `/team-relay:doctor` 가 알려준다 — 미설정이면 ✗ 와 함께 복사용 한 줄을 출력한다.
+> 경로에 **버전이 들어가지 않는다** — 플러그인이 기동할 때마다 설정 폴더로 스크립트를
+> 복사해 두기 때문이다. 그래서 업데이트해도 이 설정을 다시 고칠 일이 없다.
+> `<나>` 부분을 포함한 정확한 경로는 `/team-relay:doctor` 가 복사용으로 출력한다.
 
 | 상태줄 표시 | 뜻 |
 |---|---|

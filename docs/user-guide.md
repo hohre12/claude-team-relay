@@ -48,6 +48,27 @@ alias claude-team-yolo='TEAM_RELAY_GATEWAY=1 claude --dangerously-skip-permissio
 /team-relay:join <서버주소> <초대코드>
 ```
 
+**5) 상태줄 등록 (권장, 10초)** — `~/.claude/settings.json` 에 아래 한 줄을 넣고 Claude Code 를
+재시작한다. 팀 연결이 끊기거나 플러그인이 죽어도 **상태줄이 바로 알려준다**(안 넣으면
+조용히 끊겨 있어도 모른다 — 실제로 2026-09 에 팀원 3명이 7일간 끊긴 줄 몰랐다).
+
+```jsonc
+{ "statusLine": { "type": "command",
+    "command": "~/.claude/plugins/cache/jwbae-plugins/team-relay/plugin/statusline.sh" } }
+```
+
+정확한 경로는 `/team-relay:doctor` 가 알려준다 — 미설정이면 ✗ 와 함께 복사용 한 줄을 출력한다.
+
+| 상태줄 표시 | 뜻 |
+|---|---|
+| `[team 🟢 repoto-squad01]` | 정상 — 그 방을 받는 중 |
+| `[team 🟢 repoto-squad01 · ⏳2]` | 정상 + 보관 메시지 2건 |
+| `[team ⚠️ 담당없음 · 빈방 1]` | 아무 방도 안 받는 중 → `/team-relay:room` |
+| `[team ✗ 연결없음]` | 중계 서버에 못 붙음 |
+| `[team ✗ 플러그인 미동작]` | 플러그인 프로세스가 죽음 → `/mcp` 재연결 또는 재시작 |
+| `[team ✗ 구버전 — /plugin update]` | 서버가 거절 중 |
+| `[team 🌙 퇴근]` | away 켜짐 |
+
 끝. 이후 `claude-team` 으로 켠 세션은 자동 접속된다.
 
 ## 게이트웨이 = 팀 메시지를 받는 세션

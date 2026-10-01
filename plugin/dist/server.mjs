@@ -17802,7 +17802,8 @@ var ServerResultSchema2 = union([
 
 // server.ts
 import { readFileSync as readFileSync3, statSync } from "fs";
-import { dirname as dirname4, join as join4 } from "path";
+import { homedir as homedir3 } from "os";
+import { dirname as dirname5, join as join5 } from "path";
 
 // core/protocol.ts
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -17916,6 +17917,20 @@ function renderRoutes(routes) {
 `);
 }
 
+// core/state.ts
+import { chmodSync as chmodSync2, mkdirSync as mkdirSync2, renameSync as renameSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { dirname as dirname3, join as join3 } from "node:path";
+var STATE_PATH = join3(dirname3(CONFIG_PATH), "state.json");
+function writeState(s) {
+  try {
+    mkdirSync2(dirname3(STATE_PATH), { recursive: true });
+    const tmp = `${STATE_PATH}.${process.pid}.tmp`;
+    writeFileSync2(tmp, JSON.stringify(s, null, 2), { mode: 384 });
+    renameSync2(tmp, STATE_PATH);
+    chmodSync2(STATE_PATH, 384);
+  } catch {}
+}
+
 // core/ws.ts
 var WS2 = globalThis.WebSocket ?? (await Promise.resolve().then(() => (init_wrapper(), exports_wrapper))).default;
 var ws_default2 = WS2;
@@ -17936,9 +17951,9 @@ function createClaudeHost(mcp) {
 }
 
 // core/config.ts
-import { chmodSync as chmodSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync as renameSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { chmodSync as chmodSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync2, renameSync as renameSync3, writeFileSync as writeFileSync3 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { dirname as dirname3, join as join3 } from "node:path";
+import { dirname as dirname4, join as join4 } from "node:path";
 var SESSION_ID2 = process.env.CLAUDE_CODE_SESSION_ID ?? "";
 var SESSION_KEEP = 50;
 function myRooms(cfg) {
@@ -17958,7 +17973,7 @@ function bindRooms(cfg, rooms) {
       delete sessions[k];
   return { ...cfg, sessions };
 }
-var CONFIG_PATH2 = process.env.TEAM_RELAY_CONFIG ?? join3(homedir2(), ".claude", "channels", "team-relay", "config.json");
+var CONFIG_PATH2 = process.env.TEAM_RELAY_CONFIG ?? join4(homedir2(), ".claude", "channels", "team-relay", "config.json");
 function loadConfig() {
   try {
     const cfg = JSON.parse(readFileSync2(CONFIG_PATH2, "utf8"));
@@ -17970,7 +17985,7 @@ function loadConfig() {
   }
 }
 function saveConfig(cfg, opts = {}) {
-  mkdirSync2(dirname3(CONFIG_PATH2), { recursive: true });
+  mkdirSync3(dirname4(CONFIG_PATH2), { recursive: true });
   const disk = loadConfig();
   const next = { ...disk ?? {}, ...cfg };
   if (disk) {
@@ -17992,9 +18007,9 @@ function saveConfig(cfg, opts = {}) {
   if (opts.roomsFromServer)
     delete next.name;
   const tmp = CONFIG_PATH2 + ".tmp";
-  writeFileSync2(tmp, JSON.stringify(next, null, 2), { mode: 384 });
-  chmodSync2(tmp, 384);
-  renameSync2(tmp, CONFIG_PATH2);
+  writeFileSync3(tmp, JSON.stringify(next, null, 2), { mode: 384 });
+  chmodSync3(tmp, 384);
+  renameSync3(tmp, CONFIG_PATH2);
 }
 function normalizeUrl(address) {
   let u = address.trim();
@@ -18021,6 +18036,26 @@ if (!protocolCache) {
   }
 }
 var heldRooms = [];
+var lastError = null;
+var lastEmpty = [];
+var lastQueued = 0;
+var lastAway = false;
+function exportState() {
+  const cfg = loadConfig();
+  const state = {
+    updatedAt: Date.now(),
+    sessionId: host.sessionId,
+    connected: wsReady,
+    gateway: host.isGateway,
+    held: [...heldRooms],
+    rooms: cfg?.rooms ?? {},
+    empty: [...lastEmpty],
+    queued: lastQueued,
+    away: lastAway,
+    lastError
+  };
+  writeState(state);
+}
 function applyWelcome(frame) {
   const cfg = loadConfig();
   if (!cfg)
@@ -18120,6 +18155,7 @@ function handleFrame(frame, sock) {
   if (frame.type === "room_lost") {
     const room = String(frame.room ?? "");
     heldRooms = heldRooms.filter((r) => r !== room);
+    exportState();
     host.notify(`[\uC218\uC2E0 \uC774\uC804] '${room}' \uBC29\uC758 \uC218\uC2E0\uC744 \uB2E4\uB978 \uC138\uC158\uC774 \uAC00\uC838\uAC14\uC2B5\uB2C8\uB2E4. \uC774 \uC138\uC158\uC740 \uADF8 \uBC29 \uBA54\uC2DC\uC9C0\uB97C \uB354 \uC774\uC0C1 \uBC1B\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4. \uC774 \uC138\uC158\uC5D0\uC11C \uB2E4\uC2DC \uBC1B\uC73C\uB824\uBA74 team_room \uC73C\uB85C \uB2F4\uB2F9\uC744 \uB418\uCC3E\uC73C\uC138\uC694(\uADF8\uB7EC\uBA74 \uADF8 \uC138\uC158\uC774 \uC218\uC2E0\uC744 \uC783\uC2B5\uB2C8\uB2E4).`, { kind: "system", room });
     return;
   }
@@ -18145,6 +18181,8 @@ function handleFrame(frame, sock) {
     }
     if (frame.reason === "revoked")
       reconnectHalted = true;
+    lastError = String(frame.reason);
+    exportState();
     notifyGatewayLost(String(frame.reason));
     return;
   }
@@ -18241,6 +18279,8 @@ async function connectWithConfig() {
           reconnectDelay = 1000;
           reconnectHalted = false;
           applyWelcome(frame);
+          lastError = null;
+          exportState();
           if (Number(frame.v) > PROTO2)
             log(`\uC11C\uBC84 \uD504\uB85C\uD1A0\uCF5C(v${frame.v})\uC774 \uD50C\uB7EC\uADF8\uC778(v${PROTO2})\uBCF4\uB2E4 \uC0C8 \uBC84\uC804 \u2014 /plugin update \uAD8C\uC7A5`);
           maybeUpdateProtocolCache(frame);
@@ -18249,6 +18289,8 @@ async function connectWithConfig() {
           log(`\uC778\uC99D \uC2E4\uD328: ${String(frame.detail ?? frame.reason ?? frame.type)}`);
           if (frame.reason === "auth_failed" || frame.reason === "plugin_outdated") {
             reconnectHalted = true;
+            lastError = String(frame.reason);
+            exportState();
             deliberateClose.add(s);
             if (ws === s) {
               ws = null;
@@ -18611,6 +18653,8 @@ ${formatRoster(welcome)}`);
       const res = await request({ type: "away", on: args.mode === "on" });
       if (res.type !== "away_ok")
         return ok(`\u2717 \uC804\uD658 \uC2E4\uD328: ${String(res.detail ?? res.reason ?? res.type)}`);
+      lastAway = !!res.away;
+      exportState();
       return ok(res.away ? "\uD83C\uDF19 \uD1F4\uADFC \uCC98\uB9AC \uC644\uB8CC \u2014 \uD300 \uBA54\uC2DC\uC9C0\uB294 \uC11C\uBC84\uC5D0 \uBCF4\uAD00\uB418\uACE0(\uBCF4\uAD00 \uAE30\uD55C \uC815\uC9C0) \uCD9C\uADFC \uC2DC \uBC30\uB2EC\uB429\uB2C8\uB2E4. \uBC1C\uC2E0\uC740 \uACC4\uC18D \uAC00\uB2A5\uD569\uB2C8\uB2E4." : `\u2713 \uCD9C\uADFC \uCC98\uB9AC \uC644\uB8CC \u2014 \uBCF4\uAD00 ${Number(res.pending ?? 0)}\uAC74\uC774 \uACE7 \uBC30\uB2EC\uB429\uB2C8\uB2E4. \uC5EC\uB7EC \uAC74\uC774\uBA74 \uAC1C\uBCC4 \uBC18\uC751 \uC804\uC5D0 \uBD80\uC7AC\uC911 \uBE0C\uB9AC\uD551\uBD80\uD130 \uC0AC\uC6A9\uC790\uC5D0\uAC8C \uBCF4\uACE0\uD558\uC138\uC694.`);
     }
     case "team_route": {
@@ -18739,6 +18783,7 @@ ${formatRoster(welcome)}`);
       if (res.type !== "room_ok")
         return ok(`\u2717 \uB2F4\uB2F9 \uC9C0\uC815 \uC2E4\uD328: ${String(res.detail ?? res.reason ?? res.type)}`);
       heldRooms = (res.held ?? []).slice();
+      exportState();
       const lost = res.lost ?? [];
       const stolen = res.stolen ?? [];
       try {
@@ -18875,9 +18920,9 @@ ${formatRoster(welcome)}`);
       check(host.isGateway, "\uC218\uC2E0(\uAC8C\uC774\uD2B8\uC6E8\uC774) \uC120\uC5B8", host.isGateway ? "\uC608" : "\uC544\uB2C8\uC694 \u2014 \uC774 \uC138\uC158\uC740 \uBC1C\uC2E0 \uC804\uC6A9", "\uD300 \uBA54\uC2DC\uC9C0\uB97C \uBC1B\uC73C\uB824\uBA74 claude \uB300\uC2E0 claude-team \uC73C\uB85C \uC138\uC158\uC744 \uCF1C\uC138\uC694 (\uC758\uB3C4\uB41C \uBC1C\uC2E0 \uC804\uC6A9 \uC138\uC158\uC774\uBA74 \uC815\uC0C1)");
       check(true, "\uB7F0\uD0C0\uC784", `${host.runtime} \xB7 \uD50C\uB7EC\uADF8\uC778 v${PLUGIN_VERSION2} \xB7 \uD504\uB85C\uD1A0\uCF5C v${PROTO2}`);
       const pkgVersion = (() => {
-        for (const dir of [PKG_DIR, dirname4(PKG_DIR.replace(/\/$/, ""))]) {
+        for (const dir of [PKG_DIR, dirname5(PKG_DIR.replace(/\/$/, ""))]) {
           try {
-            const v = JSON.parse(readFileSync3(join4(dir, "package.json"), "utf8")).version;
+            const v = JSON.parse(readFileSync3(join5(dir, "package.json"), "utf8")).version;
             if (v)
               return v;
           } catch {}
@@ -18887,6 +18932,17 @@ ${formatRoster(welcome)}`);
       if (pkgVersion && pkgVersion !== PLUGIN_VERSION2) {
         check(false, "\uBC88\uB4E4 \uC2E0\uC120\uB3C4", `\uBC88\uB4E4 v${PLUGIN_VERSION2} \u2260 \uD328\uD0A4\uC9C0 v${pkgVersion}`, "\uBC30\uD3EC\uBCF8\uC774 \uC18C\uC2A4\uBCF4\uB2E4 \uB0A1\uC558\uC2B5\uB2C8\uB2E4 \u2014 \uAD00\uB9AC\uC790\uC5D0\uAC8C \uC54C\uB9AC\uC138\uC694 (bun run build \uB204\uB77D)");
       }
+      const slPath = join5(PKG_DIR.replace(/\/dist\/?$/, "/").replace(/\/$/, ""), "statusline.sh");
+      const slRegistered = (() => {
+        try {
+          const raw = readFileSync3(join5(homedir3(), ".claude", "settings.json"), "utf8");
+          return /"statusLine"/.test(raw) && /team-relay/.test(raw);
+        } catch {
+          return false;
+        }
+      })();
+      check(slRegistered, "\uC0C1\uD0DC\uC904(statusline)", slRegistered ? "\uB4F1\uB85D\uB428" : "\uBBF8\uC124\uC815", `~/.claude/settings.json \uC5D0 \uC544\uB798\uB97C \uB123\uACE0 Claude Code \uB97C \uC7AC\uC2DC\uC791\uD558\uC138\uC694 \u2014 \uD300 \uC5F0\uACB0\uC774 \uB04A\uACA8\uB3C4 \uC0C1\uD0DC\uC904\uC774 \uC54C\uB824\uC90D\uB2C8\uB2E4:
+     "statusLine": { "type": "command", "command": "${slPath}" }`);
       check(!!protocolCache, "\uADDC\uC57D", protocolCache ? `rev ${protocolCache.rev} (\uCE90\uC2DC)` : "\uCE90\uC2DC \uC5C6\uC74C \u2014 \uB0B4\uC7A5 \uCD5C\uC18C \uD3F4\uBC31\uC73C\uB85C \uB3D9\uC791 \uC911", "\uC11C\uBC84 \uC811\uC18D \uD6C4 \uC138\uC158\uC744 \uC7AC\uC2DC\uC791\uD558\uBA74 \uC804\uCCB4 \uADDC\uC57D\uC774 \uC801\uC6A9\uB429\uB2C8\uB2E4");
       if (cfg) {
         if (!wsReady)
@@ -18988,3 +19044,25 @@ process.stdin.on("close", shutdown);
 await mcp.connect(transport);
 if (host.isGateway && loadConfig())
   connectWithConfig();
+var STATE_HEARTBEAT_MS = Number(process.env.TEAM_RELAY_STATE_HEARTBEAT_MS ?? 30000);
+if (host.isGateway) {
+  exportState();
+  const beat = setInterval(() => {
+    if (!wsReady) {
+      exportState();
+      return;
+    }
+    request({ type: "doctor" }).then((d) => {
+      if (d.type === "doctor") {
+        lastQueued = Number(d.queueForMe ?? 0);
+        lastAway = !!d.away;
+        const rooms = d.rooms ?? {};
+        const held = new Set(d.held ?? []);
+        const byOther = new Set(d.heldByOther ?? []);
+        lastEmpty = Object.keys(rooms).filter((r) => !held.has(r) && !byOther.has(r));
+      }
+      exportState();
+    }, () => exportState());
+  }, STATE_HEARTBEAT_MS);
+  beat.unref?.();
+}

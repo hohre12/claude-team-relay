@@ -15,6 +15,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { Config, ProtocolCache, RelayFrame, RouteEntry } from './core/types'
 import {
@@ -22,6 +23,7 @@ import {
 } from './core/protocol'
 import { PLUGIN_VERSION, PROTO } from './core/version'
 import { addRoute, labelOf, removeRoute, renderRoutes } from './core/routes'
+import { type SessionState, writeState } from './core/state'
 import WS from './core/ws'
 import { createClaudeHost } from './host/claude'
 import {
@@ -48,6 +50,34 @@ if (!protocolCache) {
 
 /** 현재 이 세션이 잡은 담당 방 (welcome/room_ok 가 알려준 값) */
 let heldRooms: string[] = []
+
+/** 마지막 치명 사유 — statusline 이 "왜 안 되는지"까지 보여줄 수 있게 (v0.7 §3.3) */
+let lastError: string | null = null
+/** 서버가 알려준 부가 상태 — 하트비트(doctor)가 갱신한다 */
+let lastEmpty: string[] = []
+let lastQueued = 0
+let lastAway = false
+
+/**
+ * 상태 파일 내보내기 — 플러그인 밖(statusline)에서 읽는다.
+ * 호출은 싸고(파일 1개 rename) 실패해도 삼키므로, 상태가 바뀌는 자리마다 부담 없이 부른다.
+ */
+function exportState(): void {
+  const cfg = loadConfig()
+  const state: SessionState = {
+    updatedAt: Date.now(),
+    sessionId: host.sessionId,
+    connected: wsReady,
+    gateway: host.isGateway,
+    held: [...heldRooms],
+    rooms: cfg?.rooms ?? {},
+    empty: [...lastEmpty],
+    queued: lastQueued,
+    away: lastAway,
+    lastError,
+  }
+  writeState(state)
+}
 
 /**
  * welcome 반영 — 서버가 진실인 방·라벨을 로컬 캐시에 저장하고, 실제 담당(held)을 기록한다.
@@ -197,6 +227,7 @@ function handleFrame(frame: RelayFrame, sock?: WebSocket): void {
   if (frame.type === 'room_lost') {
     const room = String(frame.room ?? '')
     heldRooms = heldRooms.filter(r => r !== room)
+    exportState()
     void host.notify(
       `[수신 이전] '${room}' 방의 수신을 다른 세션이 가져갔습니다. 이 세션은 그 방 메시지를 더 이상 받지 않습니다. 이 세션에서 다시 받으려면 team_room 으로 담당을 되찾으세요(그러면 그 세션이 수신을 잃습니다).`,
       { kind: 'system', room },
@@ -226,6 +257,8 @@ function handleFrame(frame: RelayFrame, sock?: WebSocket): void {
     }
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
     if (frame.reason === 'revoked') reconnectHalted = true // 차단 — 도구 호출로도 루프 부활 금지 (m1)
+    lastError = String(frame.reason)
+    exportState()
     void notifyGatewayLost(String(frame.reason))
     return
   }
@@ -320,6 +353,8 @@ async function connectWithConfig(): Promise<RelayFrame | null> {
             reconnectDelay = 1000
             reconnectHalted = false
             applyWelcome(frame)
+            lastError = null
+            exportState()
             if (Number(frame.v) > PROTO) log(`서버 프로토콜(v${frame.v})이 플러그인(v${PROTO})보다 새 버전 — /plugin update 권장`)
             maybeUpdateProtocolCache(frame)
             log(`'${cfg.name}' 으로 접속 완료 (${cfg.url})`)
@@ -328,6 +363,8 @@ async function connectWithConfig(): Promise<RelayFrame | null> {
             // 회복 불가능한 인증 실패 — 이 소켓을 폐기하고 자동 재접속을 멈춘다 (리뷰 m1)
             if (frame.reason === 'auth_failed' || frame.reason === 'plugin_outdated') {
               reconnectHalted = true
+              lastError = String(frame.reason)
+              exportState()
               deliberateClose.add(s)
               if (ws === s) { ws = null; wsReady = false }
               try { s.close() } catch { /* 서버가 이미 닫음 */ }
@@ -703,6 +740,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       if (!wsReady) return ok('✗ 중계 서버에 연결돼 있지 않습니다 — /team-relay:join 으로 먼저 참가하세요')
       const res = await request({ type: 'away', on: args.mode === 'on' })
       if (res.type !== 'away_ok') return ok(`✗ 전환 실패: ${String(res.detail ?? res.reason ?? res.type)}`)
+      lastAway = !!res.away
+      exportState()
       return ok(
         res.away
           ? '🌙 퇴근 처리 완료 — 팀 메시지는 서버에 보관되고(보관 기한 정지) 출근 시 배달됩니다. 발신은 계속 가능합니다.'
@@ -815,6 +854,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       const res = await request({ type: 'room', rooms: wanted })
       if (res.type !== 'room_ok') return ok(`✗ 담당 지정 실패: ${String(res.detail ?? res.reason ?? res.type)}`)
       heldRooms = ((res.held as string[] | undefined) ?? []).slice()
+      exportState()
       const lost = (res.lost as string[] | undefined) ?? []
       const stolen = (res.stolen as string[] | undefined) ?? []
       try { saveConfig(bindRooms(loadConfig() ?? cfg, heldRooms)) } catch { /* 저장 실패는 동작을 막지 않는다 */ }
@@ -951,6 +991,16 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         check(false, '번들 신선도', `번들 v${PLUGIN_VERSION} ≠ 패키지 v${pkgVersion}`,
           '배포본이 소스보다 낡았습니다 — 관리자에게 알리세요 (bun run build 누락)')
       }
+      // 상태줄은 플러그인이 죽어도 보이는 유일한 창구다 — 미설정을 조용히 두지 않는다 (v0.7 §3.3)
+      const slPath = join(PKG_DIR.replace(/\/dist\/?$/, '/').replace(/\/$/, ''), 'statusline.sh')
+      const slRegistered = ((): boolean => {
+        try {
+          const raw = readFileSync(join(homedir(), '.claude', 'settings.json'), 'utf8')
+          return /"statusLine"/.test(raw) && /team-relay/.test(raw)
+        } catch { return false }
+      })()
+      check(slRegistered, '상태줄(statusline)', slRegistered ? '등록됨' : '미설정',
+        `~/.claude/settings.json 에 아래를 넣고 Claude Code 를 재시작하세요 — 팀 연결이 끊겨도 상태줄이 알려줍니다:\n     "statusLine": { "type": "command", "command": "${slPath}" }`)
       check(
         !!protocolCache,
         '규약',
@@ -1066,3 +1116,33 @@ process.stdin.on('close', shutdown)
 await mcp.connect(transport)
 // 게이트웨이로 선언된 세션만 자동 접속 — 일반 세션은 도구 호출 시 발신 전용으로만
 if (host.isGateway && loadConfig()) void connectWithConfig()
+
+/**
+ * 상태 하트비트 — statusline 이 읽는 state.json 을 살려둔다.
+ *
+ * updatedAt 이 멈추는 것 자체가 "플러그인이 안 돌고 있다"는 신호이므로, 주기는 statusline 의
+ * 판정 기준(60초)보다 넉넉히 짧아야 한다. 연결돼 있으면 doctor 프레임 1개로 보관 큐·퇴근·
+ * 빈 방까지 함께 갱신한다(비발신 프레임 상한 분당 120건에 비하면 무시할 수준).
+ */
+const STATE_HEARTBEAT_MS = Number(process.env.TEAM_RELAY_STATE_HEARTBEAT_MS ?? 30_000)
+if (host.isGateway) {
+  exportState()
+  const beat = setInterval(() => {
+    if (!wsReady) { exportState(); return }
+    void request({ type: 'doctor' }).then(
+      d => {
+        if (d.type === 'doctor') {
+          lastQueued = Number(d.queueForMe ?? 0)
+          lastAway = !!d.away
+          const rooms = (d.rooms ?? {}) as Record<string, string>
+          const held = new Set((d.held as string[] | undefined) ?? [])
+          const byOther = new Set((d.heldByOther as string[] | undefined) ?? [])
+          lastEmpty = Object.keys(rooms).filter(r => !held.has(r) && !byOther.has(r))
+        }
+        exportState()
+      },
+      () => exportState(), // 응답이 없어도 updatedAt 은 갱신한다 — 프로세스는 살아 있다
+    )
+  }, STATE_HEARTBEAT_MS)
+  beat.unref?.() // 하트비트가 프로세스 종료를 붙잡지 않게
+}

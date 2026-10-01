@@ -17801,7 +17801,7 @@ var ServerResultSchema2 = union([
 ]);
 
 // server.ts
-import { chmodSync as chmodSync4, mkdirSync as mkdirSync4, readFileSync as readFileSync3, renameSync as renameSync4, statSync as statSync2, writeFileSync as writeFileSync4 } from "fs";
+import { chmodSync as chmodSync4, mkdirSync as mkdirSync4, readFileSync as readFileSync3, readdirSync as readdirSync2, renameSync as renameSync4, statSync as statSync2, writeFileSync as writeFileSync4 } from "fs";
 import { homedir as homedir3 } from "os";
 import { dirname as dirname5, join as join5 } from "path";
 
@@ -17817,7 +17817,7 @@ var CONFIG_PATH = process.env.TEAM_RELAY_CONFIG ?? join(homedir(), ".claude", "c
 
 // core/version.ts
 var PROTO = 2;
-var PLUGIN_VERSION = "0.7.2";
+var PLUGIN_VERSION = "0.7.3";
 
 // core/ws.ts
 var WS = globalThis.WebSocket ?? (await Promise.resolve().then(() => (init_wrapper(), exports_wrapper))).default;
@@ -17888,7 +17888,7 @@ function fetchProtocolOnce(cfg, timeoutMs) {
 
 // core/version.ts
 var PROTO2 = 2;
-var PLUGIN_VERSION2 = "0.7.2";
+var PLUGIN_VERSION2 = "0.7.3";
 
 // core/rooms.ts
 function classifyRooms(rooms, held, heldByOther) {
@@ -19067,6 +19067,25 @@ ${renderRooms(list)}`;
       })();
       if (pkgVersion && pkgVersion !== PLUGIN_VERSION2) {
         check(false, "\uBC88\uB4E4 \uC2E0\uC120\uB3C4", `\uBC88\uB4E4 v${PLUGIN_VERSION2} \u2260 \uD328\uD0A4\uC9C0 v${pkgVersion}`, "\uBC30\uD3EC\uBCF8\uC774 \uC18C\uC2A4\uBCF4\uB2E4 \uB0A1\uC558\uC2B5\uB2C8\uB2E4 \u2014 \uAD00\uB9AC\uC790\uC5D0\uAC8C \uC54C\uB9AC\uC138\uC694 (bun run build \uB204\uB77D)");
+      }
+      const newerInstalled = (() => {
+        try {
+          const versionsDir = dirname5(dirname5(PLUGIN_DIR));
+          const cmp = (a, b) => {
+            const pa = a.split(".").map(Number), pb = b.split(".").map(Number);
+            for (let i = 0;i < 3; i++)
+              if ((pa[i] ?? 0) !== (pb[i] ?? 0))
+                return (pa[i] ?? 0) - (pb[i] ?? 0);
+            return 0;
+          };
+          const found = readdirSync2(versionsDir).filter((d) => /^\d+\.\d+\.\d+$/.test(d) && cmp(d, PLUGIN_VERSION2) > 0).sort(cmp);
+          return found.length ? found[found.length - 1] : null;
+        } catch {
+          return null;
+        }
+      })();
+      if (newerInstalled) {
+        check(false, "\uC2E4\uD589 \uC911 \uBC84\uC804", `v${PLUGIN_VERSION2} (\uC124\uCE58\uBCF8\uC740 v${newerInstalled})`, "\uD50C\uB7EC\uADF8\uC778\uC740 \uC5C5\uB370\uC774\uD2B8\uB410\uC9C0\uB9CC \uC774 \uC138\uC158\uC740 \uC61B \uD504\uB85C\uC138\uC2A4\uB97C \uBB3C\uACE0 \uC788\uC2B5\uB2C8\uB2E4 \u2014 Claude Code \uB97C \uC644\uC804\uD788 \uC885\uB8CC\uD55C \uB4A4 \uB2E4\uC2DC \uCF1C\uC138\uC694");
       }
       const settingsRaw = (() => {
         try {

@@ -14,7 +14,7 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { Config, ProtocolCache, RelayFrame, RouteEntry } from './core/types'
@@ -1066,6 +1066,26 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       if (pkgVersion && pkgVersion !== PLUGIN_VERSION) {
         check(false, '번들 신선도', `번들 v${PLUGIN_VERSION} ≠ 패키지 v${pkgVersion}`,
           '배포본이 소스보다 낡았습니다 — 관리자에게 알리세요 (bun run build 누락)')
+      }
+      // /plugin update 는 디스크만 바꾼다. **이미 떠 있는 세션의 MCP 프로세스는 옛 코드를 계속
+      // 물고 돈다** — 설치본 폴더에 더 새 버전이 있으면 이 세션은 재시작이 필요하다는 뜻이다.
+      const newerInstalled = ((): string | null => {
+        try {
+          const versionsDir = dirname(dirname(PLUGIN_DIR)) // …/team-relay/<버전>/plugin → …/team-relay
+          const cmp = (a: string, b: string): number => {
+            const pa = a.split('.').map(Number), pb = b.split('.').map(Number)
+            for (let i = 0; i < 3; i++) if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) - (pb[i] ?? 0)
+            return 0
+          }
+          const found = readdirSync(versionsDir)
+            .filter(d => /^\d+\.\d+\.\d+$/.test(d) && cmp(d, PLUGIN_VERSION) > 0)
+            .sort(cmp)
+          return found.length ? found[found.length - 1]! : null
+        } catch { return null }
+      })()
+      if (newerInstalled) {
+        check(false, '실행 중 버전', `v${PLUGIN_VERSION} (설치본은 v${newerInstalled})`,
+          '플러그인은 업데이트됐지만 이 세션은 옛 프로세스를 물고 있습니다 — Claude Code 를 완전히 종료한 뒤 다시 켜세요')
       }
       // 상태줄은 플러그인이 죽어도 보이는 유일한 창구다 — 미설정을 조용히 두지 않는다 (v0.7 §3.3)
       const settingsRaw = ((): string | null => {

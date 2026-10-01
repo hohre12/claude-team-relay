@@ -67,9 +67,13 @@ alias claude-team-yolo='TEAM_RELAY_GATEWAY=1 claude --dangerously-skip-permissio
 | `[team 🟢 repoto-squad01 · ⏳2]` | 정상 + 보관 메시지 2건 |
 | `[team ⚠️ 담당없음 · 빈방 1]` | 아무 방도 안 받는 중 → `/team-relay:room` |
 | `[team ✗ 연결없음]` | 중계 서버에 못 붙음 |
-| `[team ✗ 플러그인 미동작]` | 플러그인 프로세스가 죽음 → `/mcp` 재연결 또는 재시작 |
+| `[team ✗ 플러그인 미동작]` | 플러그인이 죽었거나 **아예 못 뜸** → `/mcp` 재연결 또는 Claude Code 재시작 |
 | `[team ✗ 구버전 — /plugin update]` | 서버가 거절 중 |
 | `[team 🌙 퇴근]` | away 켜짐 |
+
+> 상태줄은 **세션마다 독립**이다. 한 머신에서 여러 세션이 각자 다른 방을 담당하면 각 창이
+> 자기 담당만 보여준다. 팀 채널을 쓰지 않는 평범한 `claude` 세션에는 아무것도 뜨지 않는다.
+> `+1` 은 **이 세션이 담당하는 방 개수**지 소속 방 개수가 아니다.
 
 끝. 이후 `claude-team` 으로 켠 세션은 자동 접속된다.
 

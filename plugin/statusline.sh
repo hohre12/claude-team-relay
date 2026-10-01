@@ -15,7 +15,16 @@ else
   [ -n "$SID" ] || exit 0
   STATE="$DIR/state-$SID.json"
 fi
-[ -f "$STATE" ] || exit 0
+
+# 내 세션의 상태 파일이 없다 — 두 가지 뜻이 있다.
+#   · 평범한 claude 세션       → 팀 채널을 안 쓰는 것이므로 아무것도 안 띄운다
+#   · claude-team 세션인데 없음 → 플러그인이 **아예 못 떴다**는 뜻이다. 그 글자를 쓸
+#     주체가 바로 그 죽은 플러그인이라 파일로는 알릴 수 없다. 그래서 환경변수로 판정한다
+#     (TEAM_RELAY_GATEWAY 는 alias 가 세션에 걸어주므로 이 스크립트도 상속받는다).
+if [ ! -f "$STATE" ]; then
+  [ "$TEAM_RELAY_GATEWAY" = "1" ] && printf '[team ✗ 플러그인 미동작]'
+  exit 0
+fi
 
 RAW=$(cat "$STATE" 2>/dev/null) || exit 0
 

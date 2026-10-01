@@ -17890,6 +17890,34 @@ function fetchProtocolOnce(cfg, timeoutMs) {
 var PROTO2 = 2;
 var PLUGIN_VERSION2 = "0.7.0";
 
+// core/rooms.ts
+function classifyRooms(rooms, held, heldByOther) {
+  const mine = new Set(held);
+  const other = new Set(heldByOther);
+  return Object.entries(rooms).map(([room, label]) => ({
+    room,
+    label,
+    mark: mine.has(room) ? "mine" : other.has(room) ? "other" : "empty"
+  }));
+}
+var ICON = { mine: "\uD83D\uDFE2", other: "\uD83D\uDD35", empty: "⚪" };
+var NOTE = {
+  mine: "이 세션이 받는 중",
+  other: "다른 세션이 담당 중",
+  empty: "비어 있음 — 지금 아무도 받지 않습니다"
+};
+function renderRooms(list) {
+  return list.map((r) => `  ${ICON[r.mark]} ${r.room} (${r.label})   ${NOTE[r.mark]}`).join(`
+`);
+}
+function choiceLabel(r) {
+  const tail = r.mark === "other" ? " · 고르면 그 세션은 수신을 잃습니다" : "";
+  return `${ICON[r.mark]} ${r.room} (${r.label}) — ${NOTE[r.mark]}${tail}`;
+}
+function emptyRooms(list) {
+  return list.filter((r) => r.mark === "empty").map((r) => r.room);
+}
+
 // core/routes.ts
 function labelOf(r) {
   return r.room ? `[방 ${r.room}] → ${r.session}` : `"${r.keywords}" → ${r.session}`;
@@ -17946,6 +17974,34 @@ function createClaudeHost(mcp) {
         method: "notifications/claude/channel",
         params: { content, meta: meta2 }
       });
+    },
+    async choose(spec) {
+      if (!mcp.getClientCapabilities()?.elicitation)
+        return null;
+      try {
+        const res = await mcp.elicitInput({
+          mode: "form",
+          message: spec.message,
+          requestedSchema: {
+            type: "object",
+            properties: {
+              choice: {
+                type: "string",
+                title: spec.title,
+                enum: spec.options.map((o) => o.value),
+                enumNames: spec.options.map((o) => o.label)
+              }
+            },
+            required: ["choice"]
+          }
+        });
+        if (res.action !== "accept")
+          return null;
+        const v = res.content?.choice;
+        return typeof v === "string" ? v : null;
+      } catch {
+        return null;
+      }
     }
   };
 }
@@ -18040,6 +18096,21 @@ var lastError = null;
 var lastEmpty = [];
 var lastQueued = 0;
 var lastAway = false;
+async function roomStatuses(cfg) {
+  const rooms = cfg.rooms ?? {};
+  if (!wsReady)
+    await connectWithConfig();
+  if (!wsReady)
+    return classifyRooms(rooms, heldRooms, []);
+  try {
+    const d = await request({ type: "doctor" });
+    if (d.type !== "doctor")
+      return classifyRooms(rooms, heldRooms, []);
+    return classifyRooms(d.rooms ?? rooms, d.held ?? heldRooms, d.heldByOther ?? []);
+  } catch {
+    return classifyRooms(rooms, heldRooms, []);
+  }
+}
 function exportState() {
   const cfg = loadConfig();
   const state = {
@@ -18759,18 +18830,41 @@ ${formatRoster(welcome)}`);
       if (!cfg)
         return ok("\u2717 \uC544\uC9C1 \uD300\uC5D0 \uCC38\uAC00\uD558\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4 \u2014 /team-relay:join <\uC11C\uBC84\uC8FC\uC18C> <\uCD08\uB300\uCF54\uB4DC>");
       const joinedRooms = cfg.rooms ?? {};
+      let chosen = null;
       if (!args.rooms) {
-        const lines = [
-          `\uC774 \uC138\uC158 \uB2F4\uB2F9: ${heldRooms.length ? heldRooms.join(", ") : "(\uC5C6\uC74C)"}`,
-          `\uCC38\uAC00 \uC911\uC778 \uBC29: ${Object.entries(joinedRooms).map(([r, l]) => `${r}(${l})`).join(", ") || "(\uC5C6\uC74C)"}`
-        ];
-        if (!heldRooms.length && Object.keys(joinedRooms).length > 1) {
-          lines.push('\u2192 team_room(rooms:"<\uBC29>") \uC73C\uB85C \uC774 \uC138\uC158\uC774 \uBC1B\uC744 \uBC29\uC744 \uC9C0\uC815\uD558\uC138\uC694');
+        const list = await roomStatuses(cfg);
+        const header = `\uC774 \uC138\uC158 \uB2F4\uB2F9: ${heldRooms.length ? heldRooms.map((r) => `${r}(${joinedRooms[r]})`).join(", ") : "(\uC5C6\uC74C)"}`;
+        if (list.length === 0)
+          return ok(`${header}
+\uCC38\uAC00 \uC911\uC778 \uBC29: (\uC5C6\uC74C)`);
+        const body = `${header}
+
+\uCC38\uAC00 \uC911\uC778 \uBC29 ${list.length}\uAC1C
+${renderRooms(list)}`;
+        const selectable = list.filter((r) => r.mark !== "mine");
+        if (selectable.length === 0)
+          return ok(body);
+        const NONE = "__none__";
+        const picked = await host.choose({
+          message: "\uC774 \uC138\uC158\uC774 \uBC1B\uC744 \uBC29\uC744 \uACE0\uB974\uC138\uC694",
+          title: "\uB2F4\uB2F9\uD560 \uBC29",
+          options: [
+            ...list.map((r) => ({ value: r.room, label: choiceLabel(r) })),
+            { value: NONE, label: "\uBC1B\uC9C0 \uC54A\uC74C (\uBC1C\uC2E0 \uC804\uC6A9\uC73C\uB85C \uB461\uB2C8\uB2E4)" }
+          ]
+        });
+        if (picked === null) {
+          return ok(`${body}
+
+\u2192 /team-relay:room <\uBC29\uC774\uB984> \uC73C\uB85C \uC9C0\uC815\uD558\uC138\uC694`);
         }
-        return ok(lines.join(`
-`));
+        if (picked === NONE)
+          return ok(`${body}
+
+\uB2F4\uB2F9\uC744 \uBCC0\uACBD\uD558\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4 (\uC774 \uC138\uC158\uC740 \uBC1C\uC2E0 \uC804\uC6A9\uC785\uB2C8\uB2E4)`);
+        chosen = picked;
       }
-      const wanted = args.rooms.split(",").map((r) => r.trim()).filter(Boolean);
+      const wanted = (chosen ?? args.rooms).split(",").map((r) => r.trim()).filter(Boolean);
       const notJoined = wanted.filter((r) => !(r in joinedRooms));
       if (notJoined.length) {
         return ok(`\u2717 \uCC38\uAC00\uD558\uC9C0 \uC54A\uC740 \uBC29\uC785\uB2C8\uB2E4: ${notJoined.join(", ")} \u2014 \uAD00\uB9AC\uC790\uC5D0\uAC8C \uCD08\uB300\uCF54\uB4DC\uB97C \uBC1B\uC544 /team-relay:join \uD558\uC138\uC694`);
@@ -19047,6 +19141,24 @@ if (host.isGateway && loadConfig())
 var STATE_HEARTBEAT_MS = Number(process.env.TEAM_RELAY_STATE_HEARTBEAT_MS ?? 30000);
 if (host.isGateway) {
   exportState();
+  const NUDGE_DELAY_MS = Number(process.env.TEAM_RELAY_NUDGE_DELAY_MS ?? 4000);
+  const nudge = setTimeout(async () => {
+    if (!wsReady || heldRooms.length > 0)
+      return;
+    const cfg = loadConfig();
+    const roomCount = Object.keys(cfg?.rooms ?? {}).length;
+    if (roomCount < 2)
+      return;
+    if (!lastEmpty.length) {
+      const list = await roomStatuses(cfg).catch(() => []);
+      lastEmpty = emptyRooms(list);
+    }
+    const empty = lastEmpty.length ? `
+          \u26AA \uBE44\uC5B4 \uC788\uB294 \uBC29: ${lastEmpty.join(", ")}` : "";
+    host.notify(`[\uB2F4\uB2F9 \uC5C6\uC74C] \uC774 \uC138\uC158\uC740 \uB2F4\uB2F9 \uC911\uC778 \uBC29\uC774 \uC5C6\uC5B4 \uD300 \uBA54\uC2DC\uC9C0\uB97C \uBC1B\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.${empty}
+          /team-relay:room \uC73C\uB85C \uBC1B\uC744 \uBC29\uC744 \uACE0\uB974\uC138\uC694.`, { kind: "system" });
+  }, NUDGE_DELAY_MS);
+  nudge.unref?.();
   const beat = setInterval(() => {
     if (!wsReady) {
       exportState();

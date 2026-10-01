@@ -17,4 +17,22 @@ export interface Host {
    * Claude Code 는 채널 알림으로 세션에 주입하고, 다른 호스트는 다른 수단을 쓸 수 있다.
    */
   notify(content: string, meta?: Record<string, string>): Promise<void>
+  /**
+   * 선택지를 띄우고 하나를 받아온다.
+   *
+   * 호스트가 대화형 UI 를 제공하면 그걸 쓰고, 못 하면 **null** 을 돌려준다 — 호출부는
+   * null 을 받으면 텍스트 안내로 폴백한다(기능이 사라지지 않고 한 단계 낮아질 뿐).
+   * 사용자가 취소해도 null 이다. "고르지 않음"과 "못 고름"을 구분할 필요가 없다 —
+   * 둘 다 아무것도 하지 않는 것이 맞기 때문이다.
+   */
+  choose(spec: ChoiceSpec): Promise<string | null>
+}
+
+export interface ChoiceSpec {
+  /** 대화상자 상단 문구 */
+  message: string
+  /** 필드 라벨 */
+  title: string
+  /** 선택지 — value 는 호출부가 해석하는 값, label 은 사람이 읽는 줄 */
+  options: Array<{ value: string; label: string }>
 }

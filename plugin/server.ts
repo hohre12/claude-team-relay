@@ -22,6 +22,7 @@ import {
   FALLBACK_INSTRUCTIONS, PROTOCOL_TIMEOUT_MS, fetchProtocolOnce, loadProtocolCache, saveProtocolCache,
 } from './core/protocol'
 import { PLUGIN_VERSION, PROTO } from './core/version'
+import { choiceLabel, classifyRooms, emptyRooms, renderRooms } from './core/rooms'
 import { addRoute, labelOf, removeRoute, renderRoutes } from './core/routes'
 import { type SessionState, writeState } from './core/state'
 import WS from './core/ws'
@@ -62,6 +63,27 @@ let lastAway = false
  * 상태 파일 내보내기 — 플러그인 밖(statusline)에서 읽는다.
  * 호출은 싸고(파일 1개 rename) 실패해도 삼키므로, 상태가 바뀌는 자리마다 부담 없이 부른다.
  */
+/**
+ * 방 3상태 — 서버에 doctor 1프레임을 물어 계산한다.
+ * 연결이 없으면 로컬 캐시만으로 추정한다(이 세션 담당은 알고, 남의 세션은 모른다).
+ */
+async function roomStatuses(cfg: Config): Promise<ReturnType<typeof classifyRooms>> {
+  const rooms = cfg.rooms ?? {}
+  if (!wsReady) await connectWithConfig()
+  if (!wsReady) return classifyRooms(rooms, heldRooms, [])
+  try {
+    const d = await request({ type: 'doctor' })
+    if (d.type !== 'doctor') return classifyRooms(rooms, heldRooms, [])
+    return classifyRooms(
+      (d.rooms ?? rooms) as Record<string, string>,
+      (d.held as string[] | undefined) ?? heldRooms,
+      (d.heldByOther as string[] | undefined) ?? [],
+    )
+  } catch {
+    return classifyRooms(rooms, heldRooms, [])
+  }
+}
+
 function exportState(): void {
   const cfg = loadConfig()
   const state: SessionState = {
@@ -834,17 +856,35 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       const cfg = loadConfig()
       if (!cfg) return ok('✗ 아직 팀에 참가하지 않았습니다 — /team-relay:join <서버주소> <초대코드>')
       const joinedRooms = cfg.rooms ?? {}
+      /** 대화상자로 고른 값 — 인자로 온 rooms 보다 우선한다 */
+      let chosen: string | null = null
+      // 인자 없음 — 서버에 물어 3상태를 보여주고, 가능하면 **대화상자로 고르게 한다** (v0.7 §3.4)
       if (!args.rooms) {
-        const lines = [
-          `이 세션 담당: ${heldRooms.length ? heldRooms.join(', ') : '(없음)'}`,
-          `참가 중인 방: ${Object.entries(joinedRooms).map(([r, l]) => `${r}(${l})`).join(', ') || '(없음)'}`,
-        ]
-        if (!heldRooms.length && Object.keys(joinedRooms).length > 1) {
-          lines.push('→ team_room(rooms:"<방>") 으로 이 세션이 받을 방을 지정하세요')
+        const list = await roomStatuses(cfg)
+        const header = `이 세션 담당: ${heldRooms.length ? heldRooms.map(r => `${r}(${joinedRooms[r]})`).join(', ') : '(없음)'}`
+        if (list.length === 0) return ok(`${header}\n참가 중인 방: (없음)`)
+        const body = `${header}\n\n참가 중인 방 ${list.length}개\n${renderRooms(list)}`
+        // 고를 것이 없으면(전부 이 세션 담당) 현황만 보여준다
+        const selectable = list.filter(r => r.mark !== 'mine')
+        if (selectable.length === 0) return ok(body)
+
+        const NONE = '__none__'
+        const picked = await host.choose({
+          message: '이 세션이 받을 방을 고르세요',
+          title: '담당할 방',
+          options: [
+            ...list.map(r => ({ value: r.room, label: choiceLabel(r) })),
+            { value: NONE, label: '받지 않음 (발신 전용으로 둡니다)' },
+          ],
+        })
+        if (picked === null) {
+          // 선택 UI 미지원이거나 사용자가 취소 — 목록은 그대로 보여주고 수동 경로를 안내한다
+          return ok(`${body}\n\n→ /team-relay:room <방이름> 으로 지정하세요`)
         }
-        return ok(lines.join('\n'))
+        if (picked === NONE) return ok(`${body}\n\n담당을 변경하지 않았습니다 (이 세션은 발신 전용입니다)`)
+        chosen = picked
       }
-      const wanted = args.rooms.split(',').map(r => r.trim()).filter(Boolean)
+      const wanted = (chosen ?? args.rooms!).split(',').map(r => r.trim()).filter(Boolean)
       const notJoined = wanted.filter(r => !(r in joinedRooms))
       if (notJoined.length) {
         return ok(`✗ 참가하지 않은 방입니다: ${notJoined.join(', ')} — 관리자에게 초대코드를 받아 /team-relay:join 하세요`)
@@ -1127,6 +1167,32 @@ if (host.isGateway && loadConfig()) void connectWithConfig()
 const STATE_HEARTBEAT_MS = Number(process.env.TEAM_RELAY_STATE_HEARTBEAT_MS ?? 30_000)
 if (host.isGateway) {
   exportState()
+  /**
+   * 담당 없음 넛지 — 아무 방도 받고 있지 않다는 사실을 **한 번** 알린다.
+   *
+   * 이게 없으면 사용자는 완전히 조용한 세션을 보고 "오늘은 팀이 한가하네"라고 생각한다.
+   * 소속 방이 하나뿐이면 자동 담당되므로 이 상황 자체가 생기지 않는다 — 방이 여럿일 때만
+   * 울린다. 상태줄(§3.3)이 상시 표시라면, 이쪽은 세션을 켠 그 순간의 한 번이다.
+   */
+  const NUDGE_DELAY_MS = Number(process.env.TEAM_RELAY_NUDGE_DELAY_MS ?? 4000)
+  const nudge = setTimeout(async () => {
+    if (!wsReady || heldRooms.length > 0) return
+    const cfg = loadConfig()
+    const roomCount = Object.keys(cfg?.rooms ?? {}).length
+    if (roomCount < 2) return // 방이 하나면 자동 담당된다 — 알릴 것이 없다
+    // 첫 하트비트(30초)보다 먼저 울리므로 ⚪ 목록을 여기서 한 번 채운다
+    if (!lastEmpty.length) {
+      const list = await roomStatuses(cfg!).catch(() => [])
+      lastEmpty = emptyRooms(list)
+    }
+    const empty = lastEmpty.length ? `\n          ⚪ 비어 있는 방: ${lastEmpty.join(', ')}` : ''
+    void host.notify(
+      `[담당 없음] 이 세션은 담당 중인 방이 없어 팀 메시지를 받지 않습니다.${empty}\n          /team-relay:room 으로 받을 방을 고르세요.`,
+      { kind: 'system' },
+    )
+  }, NUDGE_DELAY_MS)
+  nudge.unref?.()
+
   const beat = setInterval(() => {
     if (!wsReady) { exportState(); return }
     void request({ type: 'doctor' }).then(

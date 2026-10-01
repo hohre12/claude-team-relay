@@ -44,6 +44,14 @@ const PLUGIN_DIR = /\/dist\/?$/.test(PKG_DIR) ? dirname(PKG_DIR.replace(/\/$/, '
  * 복사해 두고, 사용자는 버전이 없는 이 경로만 한 번 등록한다.
  */
 const STATUSLINE_PATH = join(dirname(CONFIG_PATH), 'statusline.sh')
+/**
+ * 설정에 적을 형태 — 홈 아래면 `~` 로 줄인다.
+ * statusLine 의 command 는 **셸에서 실행**되므로 `~` 가 펼쳐진다(공식 문서 예시도 이 형태).
+ * 사용자 이름이 안 박히니 **그대로 복사해 다른 머신에서도 쓸 수 있다**.
+ */
+const STATUSLINE_CONFIG_PATH = STATUSLINE_PATH.startsWith(homedir() + '/')
+  ? `~${STATUSLINE_PATH.slice(homedir().length)}`
+  : STATUSLINE_PATH
 
 function installStatusline(): void {
   try {
@@ -1065,11 +1073,11 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       })()
       const slRegistered = !!settingsRaw && /"statusLine"/.test(settingsRaw) && /team-relay/.test(settingsRaw)
       check(slRegistered, '상태줄(statusline)', slRegistered ? '등록됨' : '미설정',
-        `~/.claude/settings.json 에 아래를 넣고 Claude Code 를 재시작하세요 — 팀 연결이 끊겨도 상태줄이 알려줍니다:\n     "statusLine": { "type": "command", "command": "${STATUSLINE_PATH}" }`)
+        `~/.claude/settings.json 에 아래를 넣고 Claude Code 를 재시작하세요 — 팀 연결이 끊겨도 상태줄이 알려줍니다:\n     "statusLine": { "type": "command", "command": "${STATUSLINE_CONFIG_PATH}" }`)
       // 설치본 경로에는 버전이 들어간다 — 그 경로를 박아두면 업데이트할 때마다 깨진다
       if (slRegistered && /plugins\/cache\//.test(settingsRaw!)) {
         check(false, '상태줄 경로', '버전이 박힌 설치본 경로',
-          `플러그인을 업데이트하면 그 경로가 사라집니다. 아래 **고정 경로**로 바꾸세요:\n     "command": "${STATUSLINE_PATH}"`)
+          `플러그인을 업데이트하면 그 경로가 사라집니다. 아래 **고정 경로**로 바꾸세요:\n     "command": "${STATUSLINE_CONFIG_PATH}"`)
       }
       check(
         !!protocolCache,

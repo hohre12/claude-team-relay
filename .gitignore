@@ -5,3 +5,4 @@ e2e/
 *.log
 .DS_Store
 *.pid
+.playwright-mcp/

@@ -51,8 +51,15 @@ alias claude-team-yolo='TEAM_RELAY_GATEWAY=1 claude --dangerously-skip-permissio
 "I am using this for local development", 새 MCP 서버에서 "Use this MCP server". 그다음:
 
 ```text
-/team-relay:join 10.1.100.65:9082 TR-A1B2C3D
+/team-relay:join <서버주소> <초대코드>
 ```
+
+| 자리 | 넣을 것 | 생김새 |
+|---|---|---|
+| `<서버주소>` | 관리자가 알려준 주소 | `10.1.100.65:9082` |
+| `<초대코드>` | 관리자가 준 1회용 코드 | `TR-` 로 시작하는 한 줄 |
+
+**꺾쇠째 그대로 치지 말고** 받은 값으로 바꿔 넣는다. 띄어쓰기로 구분한다.
 
 초대코드는 **1회용이고 72시간**이다. 만료됐거나 이미 쓰였다고 나오면 관리자에게 재발급을 요청한다.
 
@@ -123,7 +130,7 @@ alias claude-team-yolo='TEAM_RELAY_GATEWAY=1 claude --dangerously-skip-permissio
 | 인터페이스 합의 기록 | *"방금 합의한 스키마 대장에 올려줘"* — 상대 에이전트가 확인해야 확정, 같은 방 전원이 열람 |
 | 답장 전 내 승인 받기 | `/team-relay:status auto-reply off` |
 | 질문 위임 규칙 등록 | `/team-relay:route add "kafka, 인프라" infra-session` — 뒤는 이 머신의 세션 이름(`/rename` 으로 붙인 것). 방 단위는 `/team-relay:route add --room web3-front front-session` |
-| 다른 방에 추가로 참가 | 관리자에게 그 방의 초대코드를 받아 `/team-relay:join 10.1.100.65:9082 TR-XXXXXXX` — 신원은 그대로 유지된다 |
+| 다른 방에 추가로 참가 | 관리자에게 그 방의 초대코드를 받아 `/team-relay:join <서버주소> <초대코드>` — 신원은 그대로 유지된다 |
 | (방장만) 초대·추방·공지 | 아래 "방장이라면" 참고 — 방장 지정은 관리자가 한다 |
 
 - 질문을 보냈는데 상대가 **15분간 무반응이면 "무응답" 알림**이 온다(한도 초과·자리 비움 등).
@@ -137,20 +144,28 @@ alias claude-team-yolo='TEAM_RELAY_GATEWAY=1 claude --dangerously-skip-permissio
 
 방장은 자기 세션에서 그 방의 초대·추방·공지를 직접 처리한다. 방 이름과 인자를 끝까지 적는다.
 
-```text
-/team-relay:owner invite repoto-squad01 김가영
-```
-새 팀원용 초대코드를 발급한다. `김가영` 은 **그 방에서만 쓰이는 이름**이라 다른 방과 달라도 된다.
+아래 `<방>`·`<이름>` 자리에 실제 값을 넣는다 — 꺾쇠는 지운다.
 
 ```text
-/team-relay:owner kick repoto-squad01 김가영
+/team-relay:owner invite <방> <새 팀원 이름>
 ```
-`김가영` 을 **그 방에서만** 뺀다. 토큰과 다른 방 소속은 그대로 남는다.
+새 팀원용 초대코드를 발급한다. 그 이름은 **그 방에서만 쓰이는 이름**이라 다른 방과 달라도 된다.
+
+```text
+/team-relay:owner kick <방> <이름>
+```
+그 사람을 **그 방에서만** 뺀다. 토큰과 다른 방 소속은 그대로 남는다.
+
+```text
+/team-relay:owner notice <방> <보낼 내용>
+```
+방 전원에게 공지를 보낸다. 받는 쪽은 답장하지 않고 화면에 표시만 한다.
+
+예를 들어 `repoto-squad01` 방에 공지를 보낸다면:
 
 ```text
 /team-relay:owner notice repoto-squad01 내일 오전 배포라 11시까지 머지해주세요
 ```
-방 전원에게 공지를 보낸다. 받는 쪽은 답장하지 않고 화면에 표시만 한다.
 
 > "방장이 아닙니다" 가 나오면 관리자에게 방장 지정을 요청한다.
 

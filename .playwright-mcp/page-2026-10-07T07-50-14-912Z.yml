@@ -1,0 +1,15 @@
+- generic [ref=f4e3]:
+  - generic [ref=f4e4]:
+    - generic [ref=f4e5]: tr
+    - generic [ref=f4e6]: team-relay 관리 콘솔
+  - heading "토큰으로 들어가기" [level=2] [ref=f4e7]
+  - paragraph [ref=f4e8]:
+    - text: 이 콘솔은 사내망에 열려 있습니다. 서버의
+    - code [ref=f4e9]: relay/data/admin-token
+    - text: 값을 한 번 입력하면 12시간 유지됩니다.
+  - generic [ref=f4e10]: admin 토큰
+  - textbox "admin 토큰" [active] [ref=f4e11]:
+    - /placeholder: 서버의 relay/data/admin-token 값
+  - generic [ref=f4e12]:
+    - button "들어가기" [ref=f4e13] [cursor=pointer]
+    - generic [ref=f4e14]: 실패 5회 / 분 제한

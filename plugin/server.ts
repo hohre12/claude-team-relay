@@ -24,7 +24,7 @@ import {
 import { PLUGIN_VERSION, PROTO } from './core/version'
 import { choiceLabel, classifyRooms, emptyRooms, renderRooms } from './core/rooms'
 import { addRoute, labelOf, removeRoute, renderRoutes } from './core/routes'
-import { type SessionState, sweepStaleStates, writeState } from './core/state'
+import { type SessionState, statePath, sweepStaleStates, writeState } from './core/state'
 import WS from './core/ws'
 import { createClaudeHost } from './host/claude'
 import {
@@ -1094,6 +1094,16 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       const slRegistered = !!settingsRaw && /"statusLine"/.test(settingsRaw) && /team-relay/.test(settingsRaw)
       check(slRegistered, '상태줄(statusline)', slRegistered ? '등록됨' : '미설정',
         `~/.claude/settings.json 에 아래를 넣고 Claude Code 를 재시작하세요 — 팀 연결이 끊겨도 상태줄이 알려줍니다:\n     "statusLine": { "type": "command", "command": "${STATUSLINE_CONFIG_PATH}" }`)
+      /**
+       * 상태줄이 읽는 **그 파일**을 적는다.
+       *
+       * doctor 는 플러그인 프로세스 안에서 돌고 상태줄은 파일을 읽는다 — 서로 다른 것을
+       * 본다. 그래서 "doctor 는 다 ✓ 인데 상태줄은 ✗" 가 나올 수 있고, 실제로 나왔다
+       * (플러그인은 state-fbc4f84e 에 쓰는데 상태줄은 state-0e86d25f 를 찾고 있었다).
+       * 파일 이름을 적어 두면 그 어긋남이 한눈에 보인다.
+       */
+      const stateFile = statePath(host.sessionId).replace(/^.*\//, '')
+      check(true, '상태 파일', `${stateFile} (30초마다 갱신)`)
       // 설치본 경로에는 버전이 들어간다 — 그 경로를 박아두면 업데이트할 때마다 깨진다
       if (slRegistered && /plugins\/cache\//.test(settingsRaw!)) {
         check(false, '상태줄 경로', '버전이 박힌 설치본 경로',

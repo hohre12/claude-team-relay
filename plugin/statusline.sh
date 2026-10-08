@@ -16,14 +16,44 @@ else
   STATE="$DIR/state-$SID.json"
 fi
 
-# 내 세션의 상태 파일이 없다 — 두 가지 뜻이 있다.
-#   · 평범한 claude 세션       → 팀 채널을 안 쓰는 것이므로 아무것도 안 띄운다
-#   · claude-team 세션인데 없음 → 플러그인이 **아예 못 떴다**는 뜻이다. 그 글자를 쓸
-#     주체가 바로 그 죽은 플러그인이라 파일로는 알릴 수 없다. 그래서 환경변수로 판정한다
-#     (TEAM_RELAY_GATEWAY 는 alias 가 세션에 걸어주므로 이 스크립트도 상속받는다).
-if [ ! -f "$STATE" ]; then
-  [ "$TEAM_RELAY_GATEWAY" = "1" ] && printf '[team ✗ 플러그인 미동작]'
-  exit 0
+NOW=$(date +%s)
+
+# 그 파일이 살아 있는가 — updatedAt 이 60초 이내면 플러그인이 돌고 있는 것이다.
+fresh() {
+  [ -f "$1" ] || return 1
+  u=$(sed -n 's/.*"updatedAt"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "$1" 2>/dev/null | head -1)
+  [ -n "$u" ] || return 1
+  [ $(( NOW - u / 1000 )) -le 60 ]
+}
+
+# 내 세션 id 로 된 파일이 없거나 낡았을 때의 대비책.
+#
+# 플러그인이 쓰는 세션 id 와 상태줄이 받는 세션 id 가 **갈릴 수 있다** (실사례: 플러그인은
+# state-fbc4f84e 에 쓰는데 상태줄은 state-0e86d25f 를 찾았다. 메시지는 정상이었는데
+# 상태줄만 "플러그인 미동작" 이라고 말했다). 플러그인은 자기가 어떤 id 로 불릴지 알 수 없으므로
+# 이쪽에서 받아낸다 — **살아 있는 게이트웨이 파일이 딱 하나면 그게 내 것이다.**
+#
+# 둘 이상이면 고르지 않는다. 남의 세션 상태를 보여주느니 모른다고 하는 쪽이 낫다
+# (v0.7.0 의 단일 파일이 정확히 그 사고였다).
+if ! fresh "$STATE"; then
+  # 게이트웨이 세션이 아니면 **남의 상태를 집지 않는다.** 팀 채널을 안 쓰는 평범한 claude
+  # 세션에까지 팀 상태가 뜨면 그게 v0.7.0 의 사고다 (한 파일을 모두가 읽던 시절).
+  [ "$TEAM_RELAY_GATEWAY" = "1" ] || exit 0
+  N=0; PICK=""
+  for f in "$DIR"/state-*.json; do
+    fresh "$f" || continue
+    grep -q '"gateway"[[:space:]]*:[[:space:]]*true' "$f" 2>/dev/null || continue
+    N=$((N + 1)); PICK="$f"
+  done
+  if [ "$N" = 1 ]; then
+    STATE="$PICK"
+  else
+    # 평범한 claude 세션은 애초에 팀 채널을 안 쓰므로 조용히 빠진다.
+    # claude-team 인데 살아 있는 것이 없다 = 플러그인이 정말 안 돈다. 그 글자를 쓸 주체가
+    # 바로 그 죽은 플러그인이라 파일로는 알릴 수 없어, 환경변수로 판정한다.
+    [ "$TEAM_RELAY_GATEWAY" = "1" ] && printf '[team ✗ 플러그인 미동작]'
+    exit 0
+  fi
 fi
 
 RAW=$(cat "$STATE" 2>/dev/null) || exit 0
@@ -38,17 +68,7 @@ arr_count() {
   printf '%s' "$BODY" | tr ',' '\n' | grep -c '"'
 }
 
-UPDATED=$(field updatedAt)
-[ -z "$UPDATED" ] && exit 0
-NOW=$(date +%s)
-AGE=$(( NOW - UPDATED / 1000 ))
-
-# ① 플러그인이 안 돌고 있다 — 가장 먼저 봐야 할 상태
-if [ "$AGE" -gt 60 ]; then
-  printf '[team ✗ 플러그인 미동작]'
-  exit 0
-fi
-
+# 신선도는 위에서 이미 걸렀다 (fresh) — 여기 오면 플러그인은 돌고 있는 것이다
 GATEWAY=$(field gateway)
 [ "$GATEWAY" != "true" ] && exit 0        # 발신 전용 세션은 상태줄을 차지하지 않는다
 

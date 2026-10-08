@@ -17817,7 +17817,7 @@ var CONFIG_PATH = process.env.TEAM_RELAY_CONFIG ?? join(homedir(), ".claude", "c
 
 // core/version.ts
 var PROTO = 2;
-var PLUGIN_VERSION = "0.7.3";
+var PLUGIN_VERSION = "0.7.4";
 
 // core/ws.ts
 var WS = globalThis.WebSocket ?? (await Promise.resolve().then(() => (init_wrapper(), exports_wrapper))).default;
@@ -17888,7 +17888,7 @@ function fetchProtocolOnce(cfg, timeoutMs) {
 
 // core/version.ts
 var PROTO2 = 2;
-var PLUGIN_VERSION2 = "0.7.3";
+var PLUGIN_VERSION2 = "0.7.4";
 
 // core/rooms.ts
 function classifyRooms(rooms, held, heldByOther) {
@@ -19097,6 +19097,8 @@ ${renderRooms(list)}`;
       const slRegistered = !!settingsRaw && /"statusLine"/.test(settingsRaw) && /team-relay/.test(settingsRaw);
       check(slRegistered, "\uC0C1\uD0DC\uC904(statusline)", slRegistered ? "\uB4F1\uB85D\uB428" : "\uBBF8\uC124\uC815", `~/.claude/settings.json \uC5D0 \uC544\uB798\uB97C \uB123\uACE0 Claude Code \uB97C \uC7AC\uC2DC\uC791\uD558\uC138\uC694 \u2014 \uD300 \uC5F0\uACB0\uC774 \uB04A\uACA8\uB3C4 \uC0C1\uD0DC\uC904\uC774 \uC54C\uB824\uC90D\uB2C8\uB2E4:
      "statusLine": { "type": "command", "command": "${STATUSLINE_CONFIG_PATH}" }`);
+      const stateFile = statePath(host.sessionId).replace(/^.*\//, "");
+      check(true, "\uC0C1\uD0DC \uD30C\uC77C", `${stateFile} (30\uCD08\uB9C8\uB2E4 \uAC31\uC2E0)`);
       if (slRegistered && /plugins\/cache\//.test(settingsRaw)) {
         check(false, "\uC0C1\uD0DC\uC904 \uACBD\uB85C", "\uBC84\uC804\uC774 \uBC15\uD78C \uC124\uCE58\uBCF8 \uACBD\uB85C", `\uD50C\uB7EC\uADF8\uC778\uC744 \uC5C5\uB370\uC774\uD2B8\uD558\uBA74 \uADF8 \uACBD\uB85C\uAC00 \uC0AC\uB77C\uC9D1\uB2C8\uB2E4. \uC544\uB798 **\uACE0\uC815 \uACBD\uB85C**\uB85C \uBC14\uAFB8\uC138\uC694:
      "command": "${STATUSLINE_CONFIG_PATH}"`);

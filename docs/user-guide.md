@@ -83,7 +83,7 @@ alias claude-team-yolo='TEAM_RELAY_GATEWAY=1 claude --dangerously-skip-permissio
 | `[team 🟢 repoto-squad01 · ⏳2]` | 정상 + 보관 메시지 2건 |
 | `[team ⚠️ 담당없음 · 빈방 1]` | 아무 방도 안 받는 중 → `/team-relay:room <방 이름>` |
 | `[team ✗ 연결없음]` | 중계 서버에 못 붙음 |
-| `[team ✗ 플러그인 미동작]` | 플러그인이 죽었거나 아예 못 뜸 → `/mcp` 재연결 또는 Claude Code 재시작 |
+| `[team ✗ 플러그인 미동작]` | 플러그인이 죽었거나 아예 못 뜸 → `/mcp` 재연결 또는 Claude Code 재시작. **팀 메시지는 멀쩡한데 이것만 뜬다면** 아래 「잘 안 될 때」를 보라 |
 | `[team ✗ 구버전 — /plugin update]` | 서버가 거절 중 |
 | `[team 🌙 퇴근]` | away 켜짐 |
 
@@ -139,8 +139,12 @@ alias claude-team-yolo='TEAM_RELAY_GATEWAY=1 claude --dangerously-skip-permissio
 - 답장에 커밋 전 정보가 섞이면 `[로컬 작업 기준 · 커밋 전]` 꼬리표가 자동으로 붙는다.
 - 팀원 메시지는 내 권한 승인을 대신할 수 없고, 설정 변경 요구는 거부된다.
 - 서버 관리자가 방 전체에 **공지**를 보낼 수 있다. 공지는 답장이 필요 없고 화면에 표시만 된다.
-- 같은 방에 **누가 들어오고 나가면 알림**이 온다 — `[방 참가] '…' 방에 '…'님이 참가했습니다.`
-  모르는 이름에게 메시지가 오는 일을 막아 준다. 내가 참가할 때 나에게는 오지 않는다.
+- 같은 방에 **누가 들어오고 나가면 알림**이 온다. 모르는 이름에게 메시지가 오거나, 사라진
+  사람에게 계속 보내는 일을 막아 준다. **내 입·퇴장은 나에게 오지 않는다.**
+  ```
+  [방 참가] 'repoto-squad01' 방에 '선혁'님이 참가했습니다.
+  [방 퇴장] 'repoto-squad01' 방에서 '선혁'님이 나갔습니다.
+  ```
 
 ### 방장이라면
 
@@ -193,3 +197,4 @@ alias claude-team-yolo='TEAM_RELAY_GATEWAY=1 claude --dangerously-skip-permissio
 | 접속 직후엔 되다가 오프라인 | `/plugin update` 후 재기동. 안 되면 관리자에게 문의 |
 | 발신은 되는데 수신이 안 됨 | 그 방을 담당 중인지 본다(`/team-relay:status`). 다른 방을 담당 중이면 `/team-relay:room <그 방 이름>` — 보관분까지 배달된다 |
 | 머신을 바꿔서 토큰이 없음 | 관리자에게 **초대코드 재발급**을 요청한다. 소속 방·이름·보관 메시지가 전부 보존된다 |
+| **메시지는 잘 되는데 상태줄만 `✗ 플러그인 미동작`** | 옛 플러그인에서 `--resume` 으로 켠 세션에 생기던 오진이다. `/plugin update team-relay@jwbae-plugins` 후 **Claude Code 를 완전히 종료했다 다시 켠다**(`/plugin update` 만으로는 이미 떠 있는 플러그인이 안 바뀐다) |

@@ -39,21 +39,36 @@ if ! fresh "$STATE"; then
   # 게이트웨이 세션이 아니면 **남의 상태를 집지 않는다.** 팀 채널을 안 쓰는 평범한 claude
   # 세션에까지 팀 상태가 뜨면 그게 v0.7.0 의 사고다 (한 파일을 모두가 읽던 시절).
   [ "$TEAM_RELAY_GATEWAY" = "1" ] || exit 0
-  N=0; PICK=""
+
+  # ② **같은 claude 창이 낳은 파일을 찾는다.**
+  #
+  # 세션 id 로는 못 찾을 수 있다 — MCP 서버는 뜰 때 받은 id 를 평생 쓰는데, `--resume` 으로
+  # 대화를 고르는 데 걸린 시간이 MCP 기동보다 길면 그 id 는 **버려진 임시값**이 된다.
+  # 반면 부모 PID 는 창이 사는 동안 안 바뀌고, 상태줄은 **바로 그 claude 가 직접 띄우므로**
+  # $PPID 가 곧 그 값이다 (실측: 창 10개 전부 상태줄의 직속 부모가 claude, MCP 와 1:1).
+  # ps 를 부르지 않는다 — 양쪽 다 공짜로 아는 값이다.
+  PICK=""
   for f in "$DIR"/state-*.json; do
     fresh "$f" || continue
-    grep -q '"gateway"[[:space:]]*:[[:space:]]*true' "$f" 2>/dev/null || continue
-    N=$((N + 1)); PICK="$f"
+    pp=$(sed -n 's/.*"ppid"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "$f" 2>/dev/null | head -1)
+    [ -n "$pp" ] && [ "$pp" = "$PPID" ] || continue
+    PICK="$f"; break
   done
-  if [ "$N" = 1 ]; then
-    STATE="$PICK"
-  else
-    # 평범한 claude 세션은 애초에 팀 채널을 안 쓰므로 조용히 빠진다.
-    # claude-team 인데 살아 있는 것이 없다 = 플러그인이 정말 안 돈다. 그 글자를 쓸 주체가
-    # 바로 그 죽은 플러그인이라 파일로는 알릴 수 없어, 환경변수로 판정한다.
-    [ "$TEAM_RELAY_GATEWAY" = "1" ] && printf '[team ✗ 플러그인 미동작]'
-    exit 0
+
+  # ③ 그래도 못 찾으면(옛 버전이 쓴 파일엔 ppid 가 없다) 받아낸다 —
+  #    살아 있는 게이트웨이가 **딱 하나**면 그게 내 것이다. 둘 이상이면 고르지 않는다.
+  if [ -z "$PICK" ]; then
+    N=0
+    for f in "$DIR"/state-*.json; do
+      fresh "$f" || continue
+      grep -q '"gateway"[[:space:]]*:[[:space:]]*true' "$f" 2>/dev/null || continue
+      N=$((N + 1)); PICK="$f"
+    done
+    # 살아 있는 것이 없거나(플러그인이 정말 안 돈다) 둘 이상이라 못 고른다.
+    # 그 글자를 쓸 주체가 바로 그 죽은 플러그인이라 파일로는 알릴 수 없다.
+    [ "$N" = 1 ] || { printf '[team ✗ 플러그인 미동작]'; exit 0; }
   fi
+  STATE="$PICK"
 fi
 
 RAW=$(cat "$STATE" 2>/dev/null) || exit 0

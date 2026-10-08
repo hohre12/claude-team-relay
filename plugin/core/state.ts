@@ -63,6 +63,17 @@ export interface SessionState {
   /** 마지막 갱신 시각 — 이 값이 낡으면 플러그인이 죽은 것이다 */
   updatedAt: number
   sessionId: string
+  /**
+   * 나를 띄운 Claude Code 프로세스의 PID.
+   *
+   * **sessionId 와 달리 이 값은 거짓이 될 수 없다.** 세션 id 는 MCP 가 뜬 뒤에 바뀔 수
+   * 있지만(아래 statePath 머리말), 부모 PID 는 그 창이 사는 동안 변하지 않는다. 그리고
+   * statusline 은 **바로 그 claude 가 직접 띄우므로** `$PPID` 가 같은 값이다(실측:
+   * 창 10개 전부 상태줄의 직속 부모가 claude 였고, MCP 와 1:1 로 맞물렸다).
+   *
+   * 그래서 세션 id 가 어긋나도 이 값으로 서로를 정확히 찾는다.
+   */
+  ppid: number
   /** 중계 서버 소켓이 살아 있는가 */
   connected: boolean
   /** 이 세션이 수신을 맡는가 (claude-team alias) */

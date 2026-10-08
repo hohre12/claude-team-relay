@@ -17817,7 +17817,7 @@ var CONFIG_PATH = process.env.TEAM_RELAY_CONFIG ?? join(homedir(), ".claude", "c
 
 // core/version.ts
 var PROTO = 2;
-var PLUGIN_VERSION = "0.7.5";
+var PLUGIN_VERSION = "0.7.6";
 
 // core/ws.ts
 var WS = globalThis.WebSocket ?? (await Promise.resolve().then(() => (init_wrapper(), exports_wrapper))).default;
@@ -17888,7 +17888,7 @@ function fetchProtocolOnce(cfg, timeoutMs) {
 
 // core/version.ts
 var PROTO2 = 2;
-var PLUGIN_VERSION2 = "0.7.5";
+var PLUGIN_VERSION2 = "0.7.6";
 
 // core/rooms.ts
 function classifyRooms(rooms, held, heldByOther) {
@@ -18158,6 +18158,7 @@ function exportState() {
   const state = {
     updatedAt: Date.now(),
     sessionId: host.sessionId,
+    ppid: process.ppid,
     connected: wsReady,
     gateway: host.isGateway,
     held: [...heldRooms],

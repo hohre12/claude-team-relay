@@ -125,6 +125,8 @@ function exportState(): void {
   const state: SessionState = {
     updatedAt: Date.now(),
     sessionId: host.sessionId,
+    /* 세션 id 는 어긋날 수 있다 — 상태줄이 확실히 짝을 찾는 열쇠는 이쪽이다 */
+    ppid: process.ppid,
     connected: wsReady,
     gateway: host.isGateway,
     held: [...heldRooms],

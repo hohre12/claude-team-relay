@@ -17817,7 +17817,7 @@ var CONFIG_PATH = process.env.TEAM_RELAY_CONFIG ?? join(homedir(), ".claude", "c
 
 // core/version.ts
 var PROTO = 2;
-var PLUGIN_VERSION = "0.7.4";
+var PLUGIN_VERSION = "0.7.5";
 
 // core/ws.ts
 var WS = globalThis.WebSocket ?? (await Promise.resolve().then(() => (init_wrapper(), exports_wrapper))).default;
@@ -17888,7 +17888,7 @@ function fetchProtocolOnce(cfg, timeoutMs) {
 
 // core/version.ts
 var PROTO2 = 2;
-var PLUGIN_VERSION2 = "0.7.4";
+var PLUGIN_VERSION2 = "0.7.5";
 
 // core/rooms.ts
 function classifyRooms(rooms, held, heldByOther) {
@@ -17952,7 +17952,7 @@ var STATE_DIR = dirname3(CONFIG_PATH);
 function statePath(sessionId) {
   return join3(STATE_DIR, `state-${sessionId.replace(/[^A-Za-z0-9_-]/g, "")}.json`);
 }
-function sweepStaleStates(maxAgeMs = 24 * 60 * 60 * 1000, now = Date.now()) {
+function sweepStaleStates(maxAgeMs = 60 * 60 * 1000, now = Date.now()) {
   try {
     for (const f of readdirSync(STATE_DIR)) {
       if (!/^state-.*\.json$/.test(f))

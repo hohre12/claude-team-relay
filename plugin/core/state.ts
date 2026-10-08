@@ -20,14 +20,32 @@ const STATE_DIR = dirname(CONFIG_PATH)
  * 한 머신에서 여러 세션이 동시에 돌고 각자 담당 방이 다르다. 파일이 하나면 마지막에 쓴
  * 세션이 앞선 세션을 덮어써서, 상태줄이 **남의 세션 상태**를 보여준다. 그리고 팀 채널을
  * 안 쓰는 세션(평범한 `claude`)에서도 그 파일이 읽혀 상태줄이 뜬다.
- * statusline 은 stdin 으로 받은 session_id 로 자기 파일만 찾는다 — 없으면 아무것도 안 띄운다.
+ *
+ * ⚠️ **이 이름은 세션의 진짜 id 가 아닐 수 있다.**
+ * `CLAUDE_CODE_SESSION_ID` 는 MCP 서버가 **기동하는 시점**의 값인데, `claude --resume` 은
+ * 서버를 먼저 띄우고 **그 뒤에** 이어받을 대화를 고른다. 그 순간 세션 id 가 복원된 대화의
+ * 것으로 바뀌지만, **이미 뜬 서버의 환경변수는 바뀌지 않는다.** 다시 읽어도 소용없다 —
+ * 프로세스 환경변수는 나중에 안 바뀐다. 즉 **플러그인은 자기 세션의 진짜 id 를 알 수 없다.**
+ *
+ * (실사례: 전사는 0e86d25f 인데 서버는 fbc4f84e 로 기동 → 상태줄이 자기 파일을 못 찾아
+ *  "플러그인 미동작" 을 띄웠다. 메시지 송수신은 내내 정상이었다.)
+ *
+ * 그래서 맞추려 들지 않고 **statusline 쪽에서 받아낸다** — 살아 있는 게이트웨이 파일이
+ * 하나뿐이면 그게 내 것이다. 둘 이상이면 고르지 않는다.
  */
 export function statePath(sessionId: string): string {
   return join(STATE_DIR, `state-${sessionId.replace(/[^A-Za-z0-9_-]/g, '')}.json`)
 }
 
-/** 끝난 세션의 상태 파일 청소 — 하루 지난 것은 지운다 (무한 누적 방지) */
-export function sweepStaleStates(maxAgeMs = 24 * 60 * 60 * 1000, now = Date.now()): void {
+/**
+ * 끝난 세션의 상태 파일 청소.
+ *
+ * 1시간이다(전에는 24시간). 상태 파일은 **쓰는 쪽이 살아 있는 동안만** 뜻이 있다 —
+ * 30초마다 갱신되므로 1시간이 지난 파일은 그 세션이 끝났다는 뜻이고, 남겨 둬야 할 이유가
+ * 없다. 24시간이면 하루치 죽은 파일이 쌓여, "지금 어느 게 살아 있나" 를 볼 때 사람을
+ * 헷갈리게 한다 (실사례: 창 하나뿐인데 파일이 4개였고 그중 3개가 시체였다).
+ */
+export function sweepStaleStates(maxAgeMs = 60 * 60 * 1000, now = Date.now()): void {
   try {
     for (const f of readdirSync(STATE_DIR)) {
       if (!/^state-.*\.json$/.test(f)) continue

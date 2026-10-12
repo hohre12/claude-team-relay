@@ -1,10 +1,11 @@
 {
   "name": "team-relay-channel",
   "private": true,
-  "version": "0.7.3",
+  "version": "0.7.6",
   "scripts": {
     "start": "bun server.ts",
-    "build": "bun build server.ts --target=node --outfile dist/server.mjs"
+    "build": "bun check-version.ts && bun build server.ts --target=node --outfile dist/server.mjs",
+    "check-version": "bun check-version.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",

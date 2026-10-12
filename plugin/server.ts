@@ -1066,8 +1066,18 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         return null
       })()
       if (pkgVersion && pkgVersion !== PLUGIN_VERSION) {
+        /* 어긋나는 방향이 둘이고 **원인이 정반대**라, 처방도 갈라 적는다.
+           전에는 어느 쪽이든 "빌드 누락" 이라고만 해서, 번호를 안 올린 경우에
+           엉뚱한 처방이 나갔다(실사례: 번들 0.7.6 / 패키지 0.7.3). */
+        const stale = ((): boolean => {
+          const a = PLUGIN_VERSION.split('.').map(Number), b = pkgVersion.split('.').map(Number)
+          for (let i = 0; i < 3; i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) < (b[i] ?? 0)
+          return false
+        })()
         check(false, '번들 신선도', `번들 v${PLUGIN_VERSION} ≠ 패키지 v${pkgVersion}`,
-          '배포본이 소스보다 낡았습니다 — 관리자에게 알리세요 (bun run build 누락)')
+          stale
+            ? '배포본이 소스보다 낡았습니다 — 관리자에게 알리세요 (bun run build 누락)'
+            : '배포본은 최신인데 package.json 의 번호만 안 올라갔습니다 — 동작에는 지장이 없습니다. 관리자에게 알리세요')
       }
       // /plugin update 는 디스크만 바꾼다. **이미 떠 있는 세션의 MCP 프로세스는 옛 코드를 계속
       // 물고 돈다** — 설치본 폴더에 더 새 버전이 있으면 이 세션은 재시작이 필요하다는 뜻이다.

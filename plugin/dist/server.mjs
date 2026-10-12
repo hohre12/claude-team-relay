@@ -19067,7 +19067,14 @@ ${renderRooms(list)}`;
         return null;
       })();
       if (pkgVersion && pkgVersion !== PLUGIN_VERSION2) {
-        check(false, "\uBC88\uB4E4 \uC2E0\uC120\uB3C4", `\uBC88\uB4E4 v${PLUGIN_VERSION2} \u2260 \uD328\uD0A4\uC9C0 v${pkgVersion}`, "\uBC30\uD3EC\uBCF8\uC774 \uC18C\uC2A4\uBCF4\uB2E4 \uB0A1\uC558\uC2B5\uB2C8\uB2E4 \u2014 \uAD00\uB9AC\uC790\uC5D0\uAC8C \uC54C\uB9AC\uC138\uC694 (bun run build \uB204\uB77D)");
+        const stale = (() => {
+          const a = PLUGIN_VERSION2.split(".").map(Number), b = pkgVersion.split(".").map(Number);
+          for (let i = 0;i < 3; i++)
+            if ((a[i] ?? 0) !== (b[i] ?? 0))
+              return (a[i] ?? 0) < (b[i] ?? 0);
+          return false;
+        })();
+        check(false, "\uBC88\uB4E4 \uC2E0\uC120\uB3C4", `\uBC88\uB4E4 v${PLUGIN_VERSION2} \u2260 \uD328\uD0A4\uC9C0 v${pkgVersion}`, stale ? "\uBC30\uD3EC\uBCF8\uC774 \uC18C\uC2A4\uBCF4\uB2E4 \uB0A1\uC558\uC2B5\uB2C8\uB2E4 \u2014 \uAD00\uB9AC\uC790\uC5D0\uAC8C \uC54C\uB9AC\uC138\uC694 (bun run build \uB204\uB77D)" : "\uBC30\uD3EC\uBCF8\uC740 \uCD5C\uC2E0\uC778\uB370 package.json \uC758 \uBC88\uD638\uB9CC \uC548 \uC62C\uB77C\uAC14\uC2B5\uB2C8\uB2E4 \u2014 \uB3D9\uC791\uC5D0\uB294 \uC9C0\uC7A5\uC774 \uC5C6\uC2B5\uB2C8\uB2E4. \uAD00\uB9AC\uC790\uC5D0\uAC8C \uC54C\uB9AC\uC138\uC694");
       }
       const newerInstalled = (() => {
         try {

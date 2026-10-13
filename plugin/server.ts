@@ -19,7 +19,8 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { Config, ProtocolCache, RelayFrame, RouteEntry } from './core/types'
 import {
-  FALLBACK_INSTRUCTIONS, PROTOCOL_TIMEOUT_MS, fetchProtocolOnce, loadProtocolCache, saveProtocolCache,
+  FALLBACK_INSTRUCTIONS, PROTOCOL_TIMEOUT_MS, fetchWelcomeOnce, loadMemoryCache, loadProtocolCache,
+  memoryFromWelcome, saveMemoryCache, saveProtocolCache,
 } from './core/protocol'
 import { PLUGIN_VERSION, PROTO } from './core/version'
 import { choiceLabel, classifyRooms, emptyRooms, renderRooms } from './core/rooms'
@@ -74,15 +75,37 @@ function installStatusline(): void {
 const REQUEST_TIMEOUT_MS = Number(process.env.TEAM_RELAY_REQUEST_TIMEOUT_MS ?? 5000)
 
 
+// 기동 선접속 — 규약과 방 메모리를 **매번 새로** 받는다 (core/protocol.ts 머리말).
+// 못 받으면 저장본으로 시작한다. 기다림의 상한은 PROTOCOL_TIMEOUT_MS(기본 1.5초)다.
 let protocolCache = loadProtocolCache()
-if (!protocolCache) {
+let memoryCache = loadMemoryCache()
+let memoryFresh = false
+{
   const cfg0 = loadConfig()
-  if (cfg0) {
-    protocolCache = await fetchProtocolOnce(cfg0, PROTOCOL_TIMEOUT_MS)
-    if (protocolCache) {
-      try { saveProtocolCache(protocolCache) } catch { /* 캐시 실패는 기동을 막지 않는다 */ }
-    }
+  const got = cfg0 ? await fetchWelcomeOnce(cfg0, PROTOCOL_TIMEOUT_MS) : null
+  if (got?.protocol) {
+    protocolCache = got.protocol
+    try { saveProtocolCache(got.protocol) } catch { /* 캐시 실패는 기동을 막지 않는다 */ }
   }
+  if (got?.memory) {
+    memoryCache = got.memory
+    memoryFresh = true
+    try { saveMemoryCache(got.memory) } catch { /* 위와 같다 */ }
+  }
+}
+/**
+ * 이번 세션의 시스템 프롬프트에 들어간 방 메모리 버전. 나중에 받는 welcome·room_memory 와
+ * 비교해 **바뀐 방만** 대화 중에 알린다 (시스템 프롬프트는 다시 못 바꾼다).
+ */
+let injectedMemory: Record<string, number> = { ...(memoryCache?.revs ?? {}) }
+
+/** 시스템 프롬프트의 메모리 절 — 어느 방에도 메모리가 없으면 '' (지시문이 메모리 이전과 같다) */
+function memorySection(): string {
+  if (!memoryCache?.text) return ''
+  if (memoryFresh) return memoryCache.text
+  const d = new Date(memoryCache.at)
+  const at = `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  return `${memoryCache.text}\n(최신이 아닐 수 있음 — 세션 시작 때 중계 서버에 닿지 못해 ${at} 에 받아 둔 내용이다. 서버에 붙으면 바뀐 방은 따로 알린다.)`
 }
 
 /** 현재 이 세션이 잡은 담당 방 (welcome/room_ok 가 알려준 값) */
@@ -145,8 +168,33 @@ function exportState(): void {
  * welcome 반영 — 서버가 진실인 방·라벨을 로컬 캐시에 저장하고, 실제 담당(held)을 기록한다.
  * 담당을 못 잡은 방(lost)이 있으면 사용자에게 알린다 (다른 세션이 가져간 상태를 조용히 두지 않는다).
  */
+/**
+ * 방 메모리가 이 세션이 시작할 때 받은 것과 달라졌으면 대화 중에 알린다. 시스템 프롬프트는
+ * 기동 때 굳어서 다시 못 바꾸므로, 그 뒤의 변경은 이 알림이 전한다.
+ */
+function notifyMemory(room: string, text: string): void {
+  const body = text
+    ? `[방 메모리 갱신] '${room}' 방 메모리가 바뀌었다. 세션 시작 때 받은 '${room}' 메모리 대신 이것을 따른다:\n${text}`
+    : `[방 메모리 갱신] '${room}' 방 메모리가 비었다 — 세션 시작 때 받은 '${room}' 메모리는 더 이상 유효하지 않다.`
+  void host.notify(body, { kind: 'memory', room })
+}
+
+/** welcome 의 메모리를 이번 세션에 넣은 것과 비교한다 — 기동 때 서버에 못 닿았다면 여기서 따라잡는다 */
+function checkMemory(frame: RelayFrame): void {
+  const next = memoryFromWelcome(frame)
+  if (!next) return                                   // 메모리를 모르는 서버 (PROTO 3 이하)
+  const rooms = frame.memory as Record<string, { rev: number; text: string }>
+  for (const [room, m] of Object.entries(rooms)) {
+    if ((injectedMemory[room] ?? 0) !== m.rev) notifyMemory(room, m.text)
+  }
+  injectedMemory = { ...next.revs }
+  memoryCache = next
+  try { saveMemoryCache(next) } catch { /* 저장 실패는 동작을 막지 않는다 */ }
+}
+
 function applyWelcome(frame: RelayFrame): void {
   serverProto = Number(frame.v ?? 0)
+  checkMemory(frame)
   const cfg = loadConfig()
   if (!cfg) return
   const rooms = (frame.rooms ?? {}) as Record<string, string>
@@ -192,7 +240,7 @@ const mcp = new Server(
     },
     // 규약 전문은 서버(relay/protocol.md)가 배포한다 — 캐시/선접속으로 받아오고,
     // 못 받으면 보안 경계 조항만 담은 내장 폴백으로 기동한다 (thin client, v1 §2.4)
-    instructions: protocolCache?.instructions ?? FALLBACK_INSTRUCTIONS,
+    instructions: [protocolCache?.instructions ?? FALLBACK_INSTRUCTIONS, memorySection()].filter(Boolean).join('\n\n'),
   },
 )
 
@@ -284,6 +332,16 @@ function handleFrame(frame: RelayFrame, sock?: WebSocket): void {
   // expired 는 push — in-flight 응답으로 오소비 금지
   if (frame.type === 'expired') {
     void deliverExpired(frame)
+    return
+  }
+  // room_memory push (PROTO 4) — 관리자·방장이 방 메모리를 고쳤다. 이미 아는 버전이면 조용히 넘긴다
+  if (frame.type === 'room_memory') {
+    const room = String(frame.room ?? '')
+    const rev = Number(frame.rev ?? 0)
+    if ((injectedMemory[room] ?? 0) !== rev) {
+      injectedMemory[room] = rev
+      notifyMemory(room, String(frame.text ?? ''))
+    }
     return
   }
   // room_lost push — 다른 세션이 이 방 담당을 가져갔다 (v2)
@@ -515,6 +573,39 @@ function renderSent(res: RelayFrame, to: string): string {
   return base + warn
 }
 
+/** 서버가 보내는 방 메모리 모양 */
+interface MemoryDocWire {
+  description: string
+  items: Array<{ text: string; unknown: string }>
+  rev: number
+  updatedAt?: number
+  updatedBy?: string
+}
+
+function renderMemoryDoc(room: string, m: MemoryDocWire): string {
+  if (!m.description && !m.items.length) return `'${room}' 방 메모리: 비어 있습니다`
+  const lines = [`'${room}' 방 메모리${m.updatedBy ? ` (마지막 수정 ${m.updatedBy})` : ''}`]
+  if (m.description) lines.push(`설명  ${m.description}`)
+  m.items.forEach((it, i) => lines.push(`${i + 1}. ${it.text}  — 모르면: ${it.unknown}`))
+  if (m.items.length < 3) lines.push(`(항목 ${m.items.length}/3)`)
+  return lines.join('\n')
+}
+
+/** 메모리 거부 사유 — 무엇을 고치면 되는지 */
+function renderMemoryError(reason: string): string {
+  if (reason.startsWith('memory_conflict')) return '그사이 다른 곳(관리자·다른 세션)에서 먼저 고쳤습니다 — view 로 최신 내용을 보고 다시 하세요'
+  if (reason.startsWith('memory_item_unknown_required')) return "'모르면'(unknown)이 필요합니다 — 채울 수 없다면 메모리에 넣을 내용이 아닙니다"
+  if (reason.startsWith('memory_item_text_required')) return '항목 내용(text)이 필요합니다'
+  if (reason.startsWith('memory_too_long')) return '칸마다 150자까지입니다 — 한 문장으로 줄이세요'
+  if (reason === 'memory_too_many_items') return '항목은 3개까지입니다 — 하나를 remove 한 뒤 추가하세요'
+  if (reason === 'memory_tool_name') return '도구 이름(team_…)은 메모리에 넣을 수 없습니다 — 도구 사용법은 규약이 다룹니다'
+  if (reason === 'memory_full') return '3칸이 다 찼습니다 — replace 로 바꿀 항목 번호를 주세요'
+  if (reason === 'proposal_not_found') return '이미 처리됐거나 만료된 제안입니다'
+  if (reason === 'not_room_owner') return '그 방의 방장이 아닙니다'
+  if (reason === 'not_in_room') return '그 방에 속해 있지 않습니다'
+  return reason
+}
+
 /** 발신·답장 거부 사유 — 에이전트가 다음에 무엇을 할지 알 수 있게 풀어 쓴다 */
 function renderSendError(reason: string): string {
   if (reason === 'unknown_thread') return '서버가 모르는 스레드입니다 (오래돼 정리됐거나 번호가 틀림) — 새 대화라면 team_send 로 보내세요'
@@ -663,6 +754,27 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
           text: { type: 'string', description: 'notice: 공지 내용' },
         },
         required: ['action', 'room'],
+      },
+    },
+    {
+      name: 'team_memory',
+      description:
+        '방 메모리 — 방장·관리자가 방마다 정리한 짧은 사실(설명 + 항목 최대 3, 칸마다 150자)이다. 세션이 시작할 때 이미 시스템 프롬프트에 들어 있으니 따로 조회할 필요는 없다(view 는 지금 내용을 다시 볼 때). '
+        + '사용자에게 물어서 얻은 답이 **코드를 읽어서는 알 수 없고 앞으로도 매번 같을 것 같으면** propose 로 제안한다 — 방장(없으면 관리자)이 승인하면 그 방 모든 세션에 들어간다. '
+        + '방장이면 describe(설명)·add·edit·remove(항목)로 직접 고치고 approve·reject 로 제안을 처리한다.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['view', 'propose', 'describe', 'add', 'edit', 'remove', 'approve', 'reject'], description: '수행할 동작' },
+          room: { type: 'string', description: '방 (생략하면 이 세션의 담당 방 — 담당이 여럿이면 필수)' },
+          text: { type: 'string', description: 'propose·add·edit: 항목 내용 (예: "금요일 배포 금지") · describe: 방 설명 (빈 문자열이면 지움)' },
+          unknown: { type: 'string', description: 'propose·add·edit: 모르면 생기는 일 (예: "주말에 사람이 호출된다") — 필수. 채울 수 없다면 메모리에 넣을 내용이 아니다' },
+          pos: { type: 'string', description: 'edit·remove: 항목 번호 (1~3)' },
+          proposal_id: { type: 'string', description: 'approve·reject: 제안 id (mp-…)' },
+          replace: { type: 'string', description: 'approve: 3칸이 다 찼을 때 이 제안으로 바꿀 항목 번호' },
+          reason: { type: 'string', description: 'reject: 거절 사유 (제안자에게 전달)' },
+        },
+        required: ['action'],
       },
     },
     {
@@ -909,6 +1021,63 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         return ok(`✓ 중계 서버를 ${url} 로 변경 — '${cfg.name}' 으로 접속 완료 (기존 토큰 유지)\n${formatRoster(welcome)}`)
       }
       return ok(`서버 주소를 ${url} 로 저장했습니다 — 지금은 연결되지 않아 백그라운드에서 자동 재시도합니다 (기존 토큰 유지)`)
+    }
+    case 'team_memory': {
+      if (!wsReady) await connectWithConfig()
+      if (!wsReady) return ok('✗ 중계 서버에 연결돼 있지 않습니다 — /team-relay:join 으로 먼저 참가하세요')
+      if (serverProto < 4) return ok('✗ 중계 서버가 구버전이라 방 메모리를 지원하지 않습니다 — 관리자에게 서버 업데이트를 요청하세요')
+      const action = String(args.action ?? '')
+      // 제안 처리는 제안 id 가 방을 정한다
+      if (action === 'approve' || action === 'reject') {
+        if (!args.proposal_id) return ok('✗ proposal_id 가 필요합니다 — 제안 알림에 적힌 mp-… 값입니다')
+        const frame: Record<string, unknown> = { type: 'memory_resolve', proposal: args.proposal_id, result: action }
+        if (args.replace) frame.replace = Number(args.replace)
+        if (args.reason) frame.reason = args.reason
+        const res = await request(frame)
+        if (res.type !== 'memory_resolved') return ok(`✗ ${renderMemoryError(String(res.reason ?? ''))}`)
+        return ok(action === 'approve'
+          ? `✓ 제안을 '${res.room}' 방 메모리에 넣었습니다 — 제안자에게 알렸습니다\n\n${renderMemoryDoc(String(res.room), res.memory as MemoryDocWire)}`
+          : `✓ 제안을 거절했습니다 — 제안자에게 사유와 함께 알렸습니다`)
+      }
+      const room = args.room ?? (heldRooms.length === 1 ? heldRooms[0] : '')
+      if (!room) return ok(`✗ 어느 방인지 room 을 지정하세요 — 이 세션 담당: ${heldRooms.join(', ') || '(없음)'}`)
+      if (action === 'propose') {
+        const res = await request({ type: 'memory_propose', room, text: args.text ?? '', unknown: args.unknown ?? '' })
+        if (res.type !== 'memory_proposed') return ok(`✗ ${renderMemoryError(String(res.reason ?? ''))}`)
+        const where = res.to === 'owner' ? '방장에게 전달했습니다'
+          : res.to === 'queued' ? '방장이 오프라인 — 접속하면 전달됩니다'
+          : res.to === 'self' ? '방장이시니 add 로 바로 넣을 수도 있습니다'
+          : '방장이 없어 관리자가 콘솔에서 처리합니다'
+        return ok(`✓ '${room}' 방 메모리에 제안했습니다 (${String(res.proposal)}) — ${where}. 72시간 안에 처리되지 않으면 폐기됩니다.`)
+      }
+      const got = await request({ type: 'memory_get', room })
+      if (got.type !== 'memory') return ok(`✗ ${renderMemoryError(String(got.reason ?? ''))}`)
+      const cur = got.memory as MemoryDocWire
+      if (action === 'view') {
+        const props = (got.proposals as Array<{ id: string; fromLabel: string; text: string; unknown: string }> | undefined) ?? []
+        const tail = props.length
+          ? '\n\n대기 중인 제안:\n' + props.map(p => `  ${p.id} · ${p.fromLabel}: ${p.text} (모르면: ${p.unknown})`).join('\n')
+          : ''
+        return ok(renderMemoryDoc(room, cur) + tail)
+      }
+      // 여기부터 방장 쓰기 — 지금 버전(rev)을 들고 가서, 그사이 누가 고쳤으면 서버가 거부한다
+      if (!got.owner) return ok(`✗ '${room}' 방의 방장이 아닙니다 — 고칠 내용은 propose 로 제안하세요`)
+      const items = cur.items.slice()
+      let description = cur.description
+      const pos = Number(args.pos)
+      const inRange = Number.isInteger(pos) && pos >= 1 && pos <= items.length
+      if (action === 'describe') description = String(args.text ?? '')
+      else if (action === 'add') items.push({ text: String(args.text ?? ''), unknown: String(args.unknown ?? '') })
+      else if (action === 'edit') {
+        if (!inRange) return ok(`✗ pos 는 1~${items.length} 중 하나여야 합니다`)
+        items[pos - 1] = { text: String(args.text ?? items[pos - 1]!.text), unknown: String(args.unknown ?? items[pos - 1]!.unknown) }
+      } else if (action === 'remove') {
+        if (!inRange) return ok(`✗ pos 는 1~${items.length} 중 하나여야 합니다`)
+        items.splice(pos - 1, 1)
+      } else return ok(`✗ 알 수 없는 action: ${action}`)
+      const res = await request({ type: 'memory_set', room, rev: cur.rev, description, items })
+      if (res.type !== 'memory_ok') return ok(`✗ ${renderMemoryError(String(res.reason ?? ''))}`)
+      return ok(`✓ '${room}' 방 메모리를 고쳤습니다 — 그 방 세션들에 바로 알려집니다\n\n${renderMemoryDoc(room, res.memory as MemoryDocWire)}`)
     }
     case 'team_owner': {
       if (!wsReady) await connectWithConfig()

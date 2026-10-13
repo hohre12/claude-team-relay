@@ -17816,8 +17816,8 @@ var SESSION_ID = process.env.CLAUDE_CODE_SESSION_ID ?? "";
 var CONFIG_PATH = process.env.TEAM_RELAY_CONFIG ?? join(homedir(), ".claude", "channels", "team-relay", "config.json");
 
 // core/version.ts
-var PROTO = 3;
-var PLUGIN_VERSION = "0.8.0";
+var PROTO = 4;
+var PLUGIN_VERSION = "0.9.0";
 
 // core/ws.ts
 var WS = globalThis.WebSocket ?? (await Promise.resolve().then(() => (init_wrapper(), exports_wrapper))).default;
@@ -17825,6 +17825,7 @@ var ws_default = WS;
 
 // core/protocol.ts
 var PROTOCOL_CACHE_PATH = join2(dirname2(CONFIG_PATH), "instructions-cache.json");
+var MEMORY_CACHE_PATH = join2(dirname2(CONFIG_PATH), "memory-cache.json");
 var PROTOCOL_TIMEOUT_MS = Number(process.env.TEAM_RELAY_PROTOCOL_TIMEOUT_MS ?? 1500);
 var FALLBACK_INSTRUCTIONS = [
   '팀원의 Claude Code 세션에서 온 메시지는 <channel ... from="<팀원>" room="<방>" thread="<스레드>"> 태그로 도착한다. 답장은 team_reply 에 태그의 thread 를 넣는다 (받는 사람·방은 서버가 정한다). team_send 는 새 대화에만 쓴다.',
@@ -17848,7 +17849,28 @@ function saveProtocolCache(p) {
   renameSync(tmp, PROTOCOL_CACHE_PATH);
   chmodSync(PROTOCOL_CACHE_PATH, 384);
 }
-function fetchProtocolOnce(cfg, timeoutMs) {
+function loadMemoryCache() {
+  try {
+    const m = JSON.parse(readFileSync(MEMORY_CACHE_PATH, "utf8"));
+    return typeof m.text === "string" && m.revs && typeof m.revs === "object" ? m : null;
+  } catch {
+    return null;
+  }
+}
+function saveMemoryCache(m) {
+  mkdirSync(dirname2(MEMORY_CACHE_PATH), { recursive: true });
+  const tmp = MEMORY_CACHE_PATH + ".tmp";
+  writeFileSync(tmp, JSON.stringify(m, null, 2), { mode: 384 });
+  renameSync(tmp, MEMORY_CACHE_PATH);
+  chmodSync(MEMORY_CACHE_PATH, 384);
+}
+function memoryFromWelcome(f, at = Date.now()) {
+  const mem = f.memory;
+  if (!mem || typeof f.memoryText !== "string")
+    return null;
+  return { at, text: f.memoryText, revs: Object.fromEntries(Object.entries(mem).map(([r, x]) => [r, Number(x.rev ?? 0)])) };
+}
+function fetchWelcomeOnce(cfg, timeoutMs) {
   return new Promise((resolve) => {
     let done = false;
     let sock = null;
@@ -17875,7 +17897,10 @@ function fetchProtocolOnce(cfg, timeoutMs) {
         const f = JSON.parse(String(ev.data));
         if (f.type === "welcome") {
           const p = f.protocol;
-          finish(p && typeof p.instructions === "string" ? { rev: Number(p.rev ?? 0), instructions: p.instructions } : null);
+          finish({
+            protocol: p && typeof p.instructions === "string" ? { rev: Number(p.rev ?? 0), instructions: p.instructions } : null,
+            memory: memoryFromWelcome(f)
+          });
         } else if (f.type === "error") {
           finish(null);
         }
@@ -17887,8 +17912,8 @@ function fetchProtocolOnce(cfg, timeoutMs) {
 }
 
 // core/version.ts
-var PROTO2 = 3;
-var PLUGIN_VERSION2 = "0.8.0";
+var PROTO2 = 4;
+var PLUGIN_VERSION2 = "0.9.0";
 
 // core/rooms.ts
 function classifyRooms(rooms, held, heldByOther) {
@@ -18122,16 +18147,35 @@ function installStatusline() {
 }
 var REQUEST_TIMEOUT_MS = Number(process.env.TEAM_RELAY_REQUEST_TIMEOUT_MS ?? 5000);
 var protocolCache = loadProtocolCache();
-if (!protocolCache) {
+var memoryCache = loadMemoryCache();
+var memoryFresh = false;
+{
   const cfg0 = loadConfig();
-  if (cfg0) {
-    protocolCache = await fetchProtocolOnce(cfg0, PROTOCOL_TIMEOUT_MS);
-    if (protocolCache) {
-      try {
-        saveProtocolCache(protocolCache);
-      } catch {}
-    }
+  const got = cfg0 ? await fetchWelcomeOnce(cfg0, PROTOCOL_TIMEOUT_MS) : null;
+  if (got?.protocol) {
+    protocolCache = got.protocol;
+    try {
+      saveProtocolCache(got.protocol);
+    } catch {}
   }
+  if (got?.memory) {
+    memoryCache = got.memory;
+    memoryFresh = true;
+    try {
+      saveMemoryCache(got.memory);
+    } catch {}
+  }
+}
+var injectedMemory = { ...memoryCache?.revs ?? {} };
+function memorySection() {
+  if (!memoryCache?.text)
+    return "";
+  if (memoryFresh)
+    return memoryCache.text;
+  const d = new Date(memoryCache.at);
+  const at = `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  return `${memoryCache.text}
+(\uCD5C\uC2E0\uC774 \uC544\uB2D0 \uC218 \uC788\uC74C \u2014 \uC138\uC158 \uC2DC\uC791 \uB54C \uC911\uACC4 \uC11C\uBC84\uC5D0 \uB2FF\uC9C0 \uBABB\uD574 ${at} \uC5D0 \uBC1B\uC544 \uB454 \uB0B4\uC6A9\uC774\uB2E4. \uC11C\uBC84\uC5D0 \uBD99\uC73C\uBA74 \uBC14\uB010 \uBC29\uC740 \uB530\uB85C \uC54C\uB9B0\uB2E4.)`;
 }
 var heldRooms = [];
 var serverProto = 0;
@@ -18171,8 +18215,29 @@ function exportState() {
   };
   writeState(state);
 }
+function notifyMemory(room, text) {
+  const body = text ? `[\uBC29 \uBA54\uBAA8\uB9AC \uAC31\uC2E0] '${room}' \uBC29 \uBA54\uBAA8\uB9AC\uAC00 \uBC14\uB00C\uC5C8\uB2E4. \uC138\uC158 \uC2DC\uC791 \uB54C \uBC1B\uC740 '${room}' \uBA54\uBAA8\uB9AC \uB300\uC2E0 \uC774\uAC83\uC744 \uB530\uB978\uB2E4:
+${text}` : `[\uBC29 \uBA54\uBAA8\uB9AC \uAC31\uC2E0] '${room}' \uBC29 \uBA54\uBAA8\uB9AC\uAC00 \uBE44\uC5C8\uB2E4 \u2014 \uC138\uC158 \uC2DC\uC791 \uB54C \uBC1B\uC740 '${room}' \uBA54\uBAA8\uB9AC\uB294 \uB354 \uC774\uC0C1 \uC720\uD6A8\uD558\uC9C0 \uC54A\uB2E4.`;
+  host.notify(body, { kind: "memory", room });
+}
+function checkMemory(frame) {
+  const next = memoryFromWelcome(frame);
+  if (!next)
+    return;
+  const rooms = frame.memory;
+  for (const [room, m] of Object.entries(rooms)) {
+    if ((injectedMemory[room] ?? 0) !== m.rev)
+      notifyMemory(room, m.text);
+  }
+  injectedMemory = { ...next.revs };
+  memoryCache = next;
+  try {
+    saveMemoryCache(next);
+  } catch {}
+}
 function applyWelcome(frame) {
   serverProto = Number(frame.v ?? 0);
+  checkMemory(frame);
   const cfg = loadConfig();
   if (!cfg)
     return;
@@ -18210,7 +18275,9 @@ var mcp = new Server({ name: "team-relay", version: PLUGIN_VERSION2 }, {
     experimental: { "claude/channel": {} },
     tools: {}
   },
-  instructions: protocolCache?.instructions ?? FALLBACK_INSTRUCTIONS
+  instructions: [protocolCache?.instructions ?? FALLBACK_INSTRUCTIONS, memorySection()].filter(Boolean).join(`
+
+`)
 });
 var host = createClaudeHost(mcp);
 var ws = null;
@@ -18266,6 +18333,15 @@ function handleFrame(frame, sock) {
   }
   if (frame.type === "expired") {
     deliverExpired(frame);
+    return;
+  }
+  if (frame.type === "room_memory") {
+    const room = String(frame.room ?? "");
+    const rev = Number(frame.rev ?? 0);
+    if ((injectedMemory[room] ?? 0) !== rev) {
+      injectedMemory[room] = rev;
+      notifyMemory(room, String(frame.text ?? ""));
+    }
     return;
   }
   if (frame.type === "room_lost") {
@@ -18484,6 +18560,41 @@ function renderSent(res, to) {
 \uD83C\uDF19 ${to} \uB294 \uD1F4\uADFC \uC0C1\uD0DC \u2014 \uCD9C\uADFC \uC2DC \uBC30\uB2EC\uB429\uB2C8\uB2E4` : "";
   return base + warn;
 }
+function renderMemoryDoc(room, m) {
+  if (!m.description && !m.items.length)
+    return `'${room}' \uBC29 \uBA54\uBAA8\uB9AC: \uBE44\uC5B4 \uC788\uC2B5\uB2C8\uB2E4`;
+  const lines = [`'${room}' \uBC29 \uBA54\uBAA8\uB9AC${m.updatedBy ? ` (\uB9C8\uC9C0\uB9C9 \uC218\uC815 ${m.updatedBy})` : ""}`];
+  if (m.description)
+    lines.push(`\uC124\uBA85  ${m.description}`);
+  m.items.forEach((it, i) => lines.push(`${i + 1}. ${it.text}  \u2014 \uBAA8\uB974\uBA74: ${it.unknown}`));
+  if (m.items.length < 3)
+    lines.push(`(\uD56D\uBAA9 ${m.items.length}/3)`);
+  return lines.join(`
+`);
+}
+function renderMemoryError(reason) {
+  if (reason.startsWith("memory_conflict"))
+    return "\uADF8\uC0AC\uC774 \uB2E4\uB978 \uACF3(\uAD00\uB9AC\uC790\xB7\uB2E4\uB978 \uC138\uC158)\uC5D0\uC11C \uBA3C\uC800 \uACE0\uCCE4\uC2B5\uB2C8\uB2E4 \u2014 view \uB85C \uCD5C\uC2E0 \uB0B4\uC6A9\uC744 \uBCF4\uACE0 \uB2E4\uC2DC \uD558\uC138\uC694";
+  if (reason.startsWith("memory_item_unknown_required"))
+    return "'\uBAA8\uB974\uBA74'(unknown)\uC774 \uD544\uC694\uD569\uB2C8\uB2E4 \u2014 \uCC44\uC6B8 \uC218 \uC5C6\uB2E4\uBA74 \uBA54\uBAA8\uB9AC\uC5D0 \uB123\uC744 \uB0B4\uC6A9\uC774 \uC544\uB2D9\uB2C8\uB2E4";
+  if (reason.startsWith("memory_item_text_required"))
+    return "\uD56D\uBAA9 \uB0B4\uC6A9(text)\uC774 \uD544\uC694\uD569\uB2C8\uB2E4";
+  if (reason.startsWith("memory_too_long"))
+    return "\uCE78\uB9C8\uB2E4 150\uC790\uAE4C\uC9C0\uC785\uB2C8\uB2E4 \u2014 \uD55C \uBB38\uC7A5\uC73C\uB85C \uC904\uC774\uC138\uC694";
+  if (reason === "memory_too_many_items")
+    return "\uD56D\uBAA9\uC740 3\uAC1C\uAE4C\uC9C0\uC785\uB2C8\uB2E4 \u2014 \uD558\uB098\uB97C remove \uD55C \uB4A4 \uCD94\uAC00\uD558\uC138\uC694";
+  if (reason === "memory_tool_name")
+    return "\uB3C4\uAD6C \uC774\uB984(team_\u2026)\uC740 \uBA54\uBAA8\uB9AC\uC5D0 \uB123\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4 \u2014 \uB3C4\uAD6C \uC0AC\uC6A9\uBC95\uC740 \uADDC\uC57D\uC774 \uB2E4\uB8F9\uB2C8\uB2E4";
+  if (reason === "memory_full")
+    return "3\uCE78\uC774 \uB2E4 \uCC3C\uC2B5\uB2C8\uB2E4 \u2014 replace \uB85C \uBC14\uAFC0 \uD56D\uBAA9 \uBC88\uD638\uB97C \uC8FC\uC138\uC694";
+  if (reason === "proposal_not_found")
+    return "\uC774\uBBF8 \uCC98\uB9AC\uB410\uAC70\uB098 \uB9CC\uB8CC\uB41C \uC81C\uC548\uC785\uB2C8\uB2E4";
+  if (reason === "not_room_owner")
+    return "\uADF8 \uBC29\uC758 \uBC29\uC7A5\uC774 \uC544\uB2D9\uB2C8\uB2E4";
+  if (reason === "not_in_room")
+    return "\uADF8 \uBC29\uC5D0 \uC18D\uD574 \uC788\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4";
+  return reason;
+}
 function renderSendError(reason) {
   if (reason === "unknown_thread")
     return "\uC11C\uBC84\uAC00 \uBAA8\uB974\uB294 \uC2A4\uB808\uB4DC\uC785\uB2C8\uB2E4 (\uC624\uB798\uB3FC \uC815\uB9AC\uB410\uAC70\uB098 \uBC88\uD638\uAC00 \uD2C0\uB9BC) \u2014 \uC0C8 \uB300\uD654\uB77C\uBA74 team_send \uB85C \uBCF4\uB0B4\uC138\uC694";
@@ -18627,6 +18738,24 @@ mcp.setRequestHandler(ListToolsRequestSchema2, async () => ({
           text: { type: "string", description: "notice: \uACF5\uC9C0 \uB0B4\uC6A9" }
         },
         required: ["action", "room"]
+      }
+    },
+    {
+      name: "team_memory",
+      description: "\uBC29 \uBA54\uBAA8\uB9AC \u2014 \uBC29\uC7A5\xB7\uAD00\uB9AC\uC790\uAC00 \uBC29\uB9C8\uB2E4 \uC815\uB9AC\uD55C \uC9E7\uC740 \uC0AC\uC2E4(\uC124\uBA85 + \uD56D\uBAA9 \uCD5C\uB300 3, \uCE78\uB9C8\uB2E4 150\uC790)\uC774\uB2E4. \uC138\uC158\uC774 \uC2DC\uC791\uD560 \uB54C \uC774\uBBF8 \uC2DC\uC2A4\uD15C \uD504\uB86C\uD504\uD2B8\uC5D0 \uB4E4\uC5B4 \uC788\uC73C\uB2C8 \uB530\uB85C \uC870\uD68C\uD560 \uD544\uC694\uB294 \uC5C6\uB2E4(view \uB294 \uC9C0\uAE08 \uB0B4\uC6A9\uC744 \uB2E4\uC2DC \uBCFC \uB54C). " + "\uC0AC\uC6A9\uC790\uC5D0\uAC8C \uBB3C\uC5B4\uC11C \uC5BB\uC740 \uB2F5\uC774 **\uCF54\uB4DC\uB97C \uC77D\uC5B4\uC11C\uB294 \uC54C \uC218 \uC5C6\uACE0 \uC55E\uC73C\uB85C\uB3C4 \uB9E4\uBC88 \uAC19\uC744 \uAC83 \uAC19\uC73C\uBA74** propose \uB85C \uC81C\uC548\uD55C\uB2E4 \u2014 \uBC29\uC7A5(\uC5C6\uC73C\uBA74 \uAD00\uB9AC\uC790)\uC774 \uC2B9\uC778\uD558\uBA74 \uADF8 \uBC29 \uBAA8\uB4E0 \uC138\uC158\uC5D0 \uB4E4\uC5B4\uAC04\uB2E4. " + "\uBC29\uC7A5\uC774\uBA74 describe(\uC124\uBA85)\xB7add\xB7edit\xB7remove(\uD56D\uBAA9)\uB85C \uC9C1\uC811 \uACE0\uCE58\uACE0 approve\xB7reject \uB85C \uC81C\uC548\uC744 \uCC98\uB9AC\uD55C\uB2E4.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["view", "propose", "describe", "add", "edit", "remove", "approve", "reject"], description: "\uC218\uD589\uD560 \uB3D9\uC791" },
+          room: { type: "string", description: "\uBC29 (\uC0DD\uB7B5\uD558\uBA74 \uC774 \uC138\uC158\uC758 \uB2F4\uB2F9 \uBC29 \u2014 \uB2F4\uB2F9\uC774 \uC5EC\uB7FF\uC774\uBA74 \uD544\uC218)" },
+          text: { type: "string", description: 'propose\xB7add\xB7edit: \uD56D\uBAA9 \uB0B4\uC6A9 (\uC608: "\uAE08\uC694\uC77C \uBC30\uD3EC \uAE08\uC9C0") \xB7 describe: \uBC29 \uC124\uBA85 (\uBE48 \uBB38\uC790\uC5F4\uC774\uBA74 \uC9C0\uC6C0)' },
+          unknown: { type: "string", description: 'propose\xB7add\xB7edit: \uBAA8\uB974\uBA74 \uC0DD\uAE30\uB294 \uC77C (\uC608: "\uC8FC\uB9D0\uC5D0 \uC0AC\uB78C\uC774 \uD638\uCD9C\uB41C\uB2E4") \u2014 \uD544\uC218. \uCC44\uC6B8 \uC218 \uC5C6\uB2E4\uBA74 \uBA54\uBAA8\uB9AC\uC5D0 \uB123\uC744 \uB0B4\uC6A9\uC774 \uC544\uB2C8\uB2E4' },
+          pos: { type: "string", description: "edit\xB7remove: \uD56D\uBAA9 \uBC88\uD638 (1~3)" },
+          proposal_id: { type: "string", description: "approve\xB7reject: \uC81C\uC548 id (mp-\u2026)" },
+          replace: { type: "string", description: "approve: 3\uCE78\uC774 \uB2E4 \uCC3C\uC744 \uB54C \uC774 \uC81C\uC548\uC73C\uB85C \uBC14\uAFC0 \uD56D\uBAA9 \uBC88\uD638" },
+          reason: { type: "string", description: "reject: \uAC70\uC808 \uC0AC\uC720 (\uC81C\uC548\uC790\uC5D0\uAC8C \uC804\uB2EC)" }
+        },
+        required: ["action"]
       }
     },
     {
@@ -18877,6 +19006,79 @@ ${formatRoster(welcome)}`);
 ${formatRoster(welcome)}`);
       }
       return ok(`\uC11C\uBC84 \uC8FC\uC18C\uB97C ${url} \uB85C \uC800\uC7A5\uD588\uC2B5\uB2C8\uB2E4 \u2014 \uC9C0\uAE08\uC740 \uC5F0\uACB0\uB418\uC9C0 \uC54A\uC544 \uBC31\uADF8\uB77C\uC6B4\uB4DC\uC5D0\uC11C \uC790\uB3D9 \uC7AC\uC2DC\uB3C4\uD569\uB2C8\uB2E4 (\uAE30\uC874 \uD1A0\uD070 \uC720\uC9C0)`);
+    }
+    case "team_memory": {
+      if (!wsReady)
+        await connectWithConfig();
+      if (!wsReady)
+        return ok("\u2717 \uC911\uACC4 \uC11C\uBC84\uC5D0 \uC5F0\uACB0\uB3FC \uC788\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4 \u2014 /team-relay:join \uC73C\uB85C \uBA3C\uC800 \uCC38\uAC00\uD558\uC138\uC694");
+      if (serverProto < 4)
+        return ok("\u2717 \uC911\uACC4 \uC11C\uBC84\uAC00 \uAD6C\uBC84\uC804\uC774\uB77C \uBC29 \uBA54\uBAA8\uB9AC\uB97C \uC9C0\uC6D0\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4 \u2014 \uAD00\uB9AC\uC790\uC5D0\uAC8C \uC11C\uBC84 \uC5C5\uB370\uC774\uD2B8\uB97C \uC694\uCCAD\uD558\uC138\uC694");
+      const action = String(args.action ?? "");
+      if (action === "approve" || action === "reject") {
+        if (!args.proposal_id)
+          return ok("\u2717 proposal_id \uAC00 \uD544\uC694\uD569\uB2C8\uB2E4 \u2014 \uC81C\uC548 \uC54C\uB9BC\uC5D0 \uC801\uD78C mp-\u2026 \uAC12\uC785\uB2C8\uB2E4");
+        const frame = { type: "memory_resolve", proposal: args.proposal_id, result: action };
+        if (args.replace)
+          frame.replace = Number(args.replace);
+        if (args.reason)
+          frame.reason = args.reason;
+        const res2 = await request(frame);
+        if (res2.type !== "memory_resolved")
+          return ok(`\u2717 ${renderMemoryError(String(res2.reason ?? ""))}`);
+        return ok(action === "approve" ? `\u2713 \uC81C\uC548\uC744 '${res2.room}' \uBC29 \uBA54\uBAA8\uB9AC\uC5D0 \uB123\uC5C8\uC2B5\uB2C8\uB2E4 \u2014 \uC81C\uC548\uC790\uC5D0\uAC8C \uC54C\uB838\uC2B5\uB2C8\uB2E4
+
+${renderMemoryDoc(String(res2.room), res2.memory)}` : `\u2713 \uC81C\uC548\uC744 \uAC70\uC808\uD588\uC2B5\uB2C8\uB2E4 \u2014 \uC81C\uC548\uC790\uC5D0\uAC8C \uC0AC\uC720\uC640 \uD568\uAED8 \uC54C\uB838\uC2B5\uB2C8\uB2E4`);
+      }
+      const room = args.room ?? (heldRooms.length === 1 ? heldRooms[0] : "");
+      if (!room)
+        return ok(`\u2717 \uC5B4\uB290 \uBC29\uC778\uC9C0 room \uC744 \uC9C0\uC815\uD558\uC138\uC694 \u2014 \uC774 \uC138\uC158 \uB2F4\uB2F9: ${heldRooms.join(", ") || "(\uC5C6\uC74C)"}`);
+      if (action === "propose") {
+        const res2 = await request({ type: "memory_propose", room, text: args.text ?? "", unknown: args.unknown ?? "" });
+        if (res2.type !== "memory_proposed")
+          return ok(`\u2717 ${renderMemoryError(String(res2.reason ?? ""))}`);
+        const where = res2.to === "owner" ? "\uBC29\uC7A5\uC5D0\uAC8C \uC804\uB2EC\uD588\uC2B5\uB2C8\uB2E4" : res2.to === "queued" ? "\uBC29\uC7A5\uC774 \uC624\uD504\uB77C\uC778 \u2014 \uC811\uC18D\uD558\uBA74 \uC804\uB2EC\uB429\uB2C8\uB2E4" : res2.to === "self" ? "\uBC29\uC7A5\uC774\uC2DC\uB2C8 add \uB85C \uBC14\uB85C \uB123\uC744 \uC218\uB3C4 \uC788\uC2B5\uB2C8\uB2E4" : "\uBC29\uC7A5\uC774 \uC5C6\uC5B4 \uAD00\uB9AC\uC790\uAC00 \uCF58\uC194\uC5D0\uC11C \uCC98\uB9AC\uD569\uB2C8\uB2E4";
+        return ok(`\u2713 '${room}' \uBC29 \uBA54\uBAA8\uB9AC\uC5D0 \uC81C\uC548\uD588\uC2B5\uB2C8\uB2E4 (${String(res2.proposal)}) \u2014 ${where}. 72\uC2DC\uAC04 \uC548\uC5D0 \uCC98\uB9AC\uB418\uC9C0 \uC54A\uC73C\uBA74 \uD3D0\uAE30\uB429\uB2C8\uB2E4.`);
+      }
+      const got = await request({ type: "memory_get", room });
+      if (got.type !== "memory")
+        return ok(`\u2717 ${renderMemoryError(String(got.reason ?? ""))}`);
+      const cur = got.memory;
+      if (action === "view") {
+        const props = got.proposals ?? [];
+        const tail = props.length ? `
+
+\uB300\uAE30 \uC911\uC778 \uC81C\uC548:
+` + props.map((p) => `  ${p.id} \xB7 ${p.fromLabel}: ${p.text} (\uBAA8\uB974\uBA74: ${p.unknown})`).join(`
+`) : "";
+        return ok(renderMemoryDoc(room, cur) + tail);
+      }
+      if (!got.owner)
+        return ok(`\u2717 '${room}' \uBC29\uC758 \uBC29\uC7A5\uC774 \uC544\uB2D9\uB2C8\uB2E4 \u2014 \uACE0\uCE60 \uB0B4\uC6A9\uC740 propose \uB85C \uC81C\uC548\uD558\uC138\uC694`);
+      const items = cur.items.slice();
+      let description = cur.description;
+      const pos = Number(args.pos);
+      const inRange = Number.isInteger(pos) && pos >= 1 && pos <= items.length;
+      if (action === "describe")
+        description = String(args.text ?? "");
+      else if (action === "add")
+        items.push({ text: String(args.text ?? ""), unknown: String(args.unknown ?? "") });
+      else if (action === "edit") {
+        if (!inRange)
+          return ok(`\u2717 pos \uB294 1~${items.length} \uC911 \uD558\uB098\uC5EC\uC57C \uD569\uB2C8\uB2E4`);
+        items[pos - 1] = { text: String(args.text ?? items[pos - 1].text), unknown: String(args.unknown ?? items[pos - 1].unknown) };
+      } else if (action === "remove") {
+        if (!inRange)
+          return ok(`\u2717 pos \uB294 1~${items.length} \uC911 \uD558\uB098\uC5EC\uC57C \uD569\uB2C8\uB2E4`);
+        items.splice(pos - 1, 1);
+      } else
+        return ok(`\u2717 \uC54C \uC218 \uC5C6\uB294 action: ${action}`);
+      const res = await request({ type: "memory_set", room, rev: cur.rev, description, items });
+      if (res.type !== "memory_ok")
+        return ok(`\u2717 ${renderMemoryError(String(res.reason ?? ""))}`);
+      return ok(`\u2713 '${room}' \uBC29 \uBA54\uBAA8\uB9AC\uB97C \uACE0\uCCE4\uC2B5\uB2C8\uB2E4 \u2014 \uADF8 \uBC29 \uC138\uC158\uB4E4\uC5D0 \uBC14\uB85C \uC54C\uB824\uC9D1\uB2C8\uB2E4
+
+${renderMemoryDoc(room, res.memory)}`);
     }
     case "team_owner": {
       if (!wsReady)

@@ -87,6 +87,8 @@ if (!protocolCache) {
 
 /** 현재 이 세션이 잡은 담당 방 (welcome/room_ok 가 알려준 값) */
 let heldRooms: string[] = []
+/** 서버의 와이어 프로토콜 — 3 이상이어야 reply 프레임을 안다 (team_reply) */
+let serverProto = 0
 
 /** 마지막 치명 사유 — statusline 이 "왜 안 되는지"까지 보여줄 수 있게 (v0.7 §3.3) */
 let lastError: string | null = null
@@ -144,6 +146,7 @@ function exportState(): void {
  * 담당을 못 잡은 방(lost)이 있으면 사용자에게 알린다 (다른 세션이 가져간 상태를 조용히 두지 않는다).
  */
 function applyWelcome(frame: RelayFrame): void {
+  serverProto = Number(frame.v ?? 0)
   const cfg = loadConfig()
   if (!cfg) return
   const rooms = (frame.rooms ?? {}) as Record<string, string>
@@ -497,6 +500,35 @@ function abandonCurrentLink(): void {
 // ── 도구 ─────────────────────────────────────────────────
 const ok = (text: string) => ({ content: [{ type: 'text' as const, text }] })
 
+/** 발신 결과 — team_send·team_reply 공용. 서버가 붙인 상태 노트는 발신자가 기다릴지 판단할 재료 */
+function renderSent(res: RelayFrame, to: string): string {
+  const base =
+    res.state === 'delivered'
+      ? `✓ ${to} 에게 즉시 배달됨 (스레드 ${res.thread})`
+      : `✓ ${to} 는 오프라인 — 중계 서버가 보관, 접속 시 배달됩니다 (스레드 ${res.thread})`
+  const warn =
+    res.note === 'unresponsive'
+      ? '\n⚠️ 상대가 최근 무응답 상태로 보입니다 (한도 초과·장기 작업·자리 비움 가능) — 답이 늦을 수 있습니다'
+      : res.note === 'away'
+        ? `\n🌙 ${to} 는 퇴근 상태 — 출근 시 배달됩니다`
+        : ''
+  return base + warn
+}
+
+/** 발신·답장 거부 사유 — 에이전트가 다음에 무엇을 할지 알 수 있게 풀어 쓴다 */
+function renderSendError(reason: string): string {
+  if (reason === 'unknown_thread') return '서버가 모르는 스레드입니다 (오래돼 정리됐거나 번호가 틀림) — 새 대화라면 team_send 로 보내세요'
+  if (reason === 'not_in_thread') return '이 스레드의 참여자가 아닙니다 — 내가 받은 메시지의 thread 만 쓸 수 있습니다'
+  if (reason === 'thread_mismatch') return 'thread 의 상대와 받는 사람이 다릅니다 — 답장은 team_reply(thread) 로, 다른 사람에게는 thread 없이 team_send 로 보내세요'
+  if (reason === 'peer_gone') return '상대가 이 방을 떠나 대화를 이어갈 수 없습니다 — 사용자에게 알리세요'
+  if (reason === 'left_room') return '내가 이 스레드의 방에서 빠져 있어 답할 수 없습니다'
+  if (reason === 'notice_no_reply') return '공지에는 답장하지 않습니다 — 사용자에게 보여주기만 하세요'
+  if (reason === 'thread_required') return 'thread 가 필요합니다 — 수신 태그의 thread 값을 넣으세요'
+  if (reason.startsWith('queue_full')) return `상대의 보관함이 가득 찼습니다 (${reason.split(':')[1] ?? ''}) — 사용자에게 알리세요`
+  if (reason === 'rate_limited') return '발신이 너무 잦습니다 (분당 상한) — 잠시 뒤 다시 보내세요'
+  return reason
+}
+
 mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
@@ -514,7 +546,8 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'team_send',
-      description: '팀원의 Claude Code 세션에 메시지를 보낸다. 상대가 오프라인이면 중계 서버가 보관 후 접속 시 배달한다.',
+      description:
+        '팀원에게 **새 대화**를 시작한다. 받은 메시지에 답할 때는 이 도구가 아니라 team_reply 를 쓴다. 상대가 오프라인이면 중계 서버가 보관 후 접속 시 배달한다.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -523,26 +556,41 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
           room: {
             type: 'string',
             description:
-              '방 꼬리표 힌트 (선택) — 답장 시 수신 메시지 태그의 room 값을 그대로 넣는다. 생략하면 서버가 공유 방 중 첫 번째를 쓴다.',
-          },
-          thread: {
-            type: 'string',
-            description: '스레드 id (선택) — 답장 시 수신 메시지 태그의 thread 값을 그대로 넣는다. 새 질문이면 생략(서버가 생성).',
+              '방 지정 (선택) — 같은 이름이 여러 방에 있으면 필요하다. 생략하면 이 세션의 담당 방에서 찾는다.',
           },
           expect: {
             type: 'string',
             enum: ['reply', 'none'],
             description:
-              '답 기대 여부 (선택) — 질문·요청이면 reply, 단순 전달·공유면 none. 생략 시 서버 기본값: 새 스레드=reply, 답장=none.',
+              '답 기대 여부 (선택, 기본 reply) — 질문·요청이면 생략, 단순 전달·공유("참고로 배포했어요")면 none. none 이면 상대가 답하지 않아도 무응답 알림이 나지 않는다.',
           },
         },
         required: ['to', 'message'],
       },
     },
     {
+      name: 'team_reply',
+      description:
+        '받은 팀 메시지에 답한다. 수신 태그의 thread 만 넣으면 받는 사람과 방은 서버가 정한다. 답하면 상대의 무응답 알림이 풀린다. 공지(kind="notice")에는 답하지 않는다.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          thread: { type: 'string', description: '수신 메시지 태그의 thread 값 그대로' },
+          message: { type: 'string', description: '답장 내용 (평문)' },
+          expect: {
+            type: 'string',
+            enum: ['reply', 'none'],
+            description:
+              '답 기대 여부 (선택, 기본 none) — 답장이면 생략. 되물어서 상대의 답이 다시 필요할 때만 reply.',
+          },
+        },
+        required: ['thread', 'message'],
+      },
+    },
+    {
       name: 'team_ack',
       description:
-        '받은 팀 질문에 아직 답하지 못할 때 수신 확인을 보낸다 — 즉답이 어려우면 status:working, 자동답장 off 로 사용자 승인 대기면 status:approval_pending. 발신자의 무응답 알림을 막는다.',
+        '받은 팀 질문(expect="reply")에 바로 답하지 못할 때 수신 확인을 보낸다 — 긴 작업 중이거나 확인이 필요하면 status:working, 자동답장 off 로 사용자 승인을 기다리면 status:approval_pending. 보내지 않으면 발신자에게 무응답 알림이 간다.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -567,7 +615,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'team_route',
       description:
-        '로컬 라우팅 등록표 관리 — 팀 질문의 키워드 또는 방(room)을 이 머신의 담당 세션에 매핑한다 (3단 위임의 1단, 방 바인딩이 키워드보다 우선). 팀 질문이 내 소관이 아니면 action:"list" 로 먼저 확인한다.',
+        '로컬 라우팅 등록표 관리 — 팀 질문의 키워드 또는 방(room)을 이 머신의 담당 세션에 매핑한다. 팀 질문이 내 소관이 아니면 이 순서로 위임한다: ① action:"list" 로 등록표 확인 — 수신 태그의 room 과 같은 방 바인딩이 있으면 키워드보다 우선해 그 세션에, 없으면 키워드가 맞는 세션에 SendMessage 로 위임 ② 등록표에 없으면 ListAgents 로 이 머신의 다른 세션(이름·작업 디렉토리)을 보고 맞는 세션에 위임 ③ 마땅한 세션이 없거나 응답이 없으면 코드를 직접 확인해 답하되 "위임 실패 — 코드 기준 직접 답변" 을 밝힌다.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -620,7 +668,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'team_agree',
       description:
-        '팀 인터페이스 합의 대장 — 문답으로 도달한 합의를 양측 확인으로 확정 기록한다. propose(제안, 상대 확인 필요) · confirm/reject(받은 제안 처리 — 직전 대화와 대조 후) · list(확정 합의는 같은 방 전원 열람).',
+        '팀 인터페이스 합의 대장 — 문답으로 인터페이스 합의에 도달하면 propose 로 기록을 제안한다(상대 확인 필요). confirm/reject 는 받은 제안 처리 — 직전 대화와 대조해 일치할 때만 confirm. list 는 확정 합의 조회(같은 방 전원 열람).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -761,31 +809,42 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
     case 'team_send': {
       if (!wsReady) await connectWithConfig()
       if (!wsReady) return ok('✗ 중계 서버에 연결돼 있지 않습니다 — /team-relay:join 으로 먼저 참가하세요')
+      // 새 대화 전용 — thread 는 싣지 않는다. 에이전트가 예전 습관대로 thread 를 넘겨도
+      // 무시한다(답장은 team_reply). 실으면 서버는 구버전 답장으로 받아 상대를 thread 로 정한다.
       const frame: Record<string, unknown> = { type: 'send', to: args.to ?? '', text: args.message ?? '' }
-      // room·thread·expect 는 지정됐을 때만 와이어에 싣는다 (생략 시 서버 기본값에 위임)
+      // room·expect 는 지정됐을 때만 와이어에 싣는다 (생략 시 서버 기본값에 위임)
       if (args.room) frame.room = args.room
-      if (args.thread) frame.thread = args.thread
       if (args.expect === 'reply' || args.expect === 'none') frame.expect = args.expect
       const res = await request(frame)
       if (res.type === 'sent') {
-        const base =
-          res.state === 'delivered'
-            ? `✓ ${args.to} 에게 즉시 배달됨 (스레드 ${res.thread})`
-            : `✓ ${args.to} 는 오프라인 — 중계 서버가 보관, 접속 시 배달됩니다 (스레드 ${res.thread})`
-        // 서버가 붙인 상태 노트 — 발신자가 기다릴지 판단할 재료
-        const warn =
-          res.note === 'unresponsive'
-            ? '\n⚠️ 상대가 최근 무응답 상태로 보입니다 (한도 초과·장기 작업·자리 비움 가능) — 답이 늦을 수 있습니다'
-            : res.note === 'away'
-              ? `\n🌙 ${args.to} 는 퇴근 상태 — 출근 시 배달됩니다`
-              : ''
-        return ok(base + warn)
+        // 상대가 나에게 물어놓고 답을 기다리는 스레드가 있었다 — 답장이었다면 도구를 잘못 골랐다
+        const hint = res.openThread
+          ? `\n💡 ${args.to} 이(가) 보낸 질문(스레드 ${String(res.openThread)})이 아직 답을 기다립니다. 그 질문에 답한 것이라면 team_reply(thread:"${String(res.openThread)}") 로 다시 보내세요 — 지금 보낸 건 새 대화로 갔습니다.`
+          : ''
+        return ok(renderSent(res, String(args.to)) + hint)
       }
       const reason = String(res.reason ?? '')
-      if (reason.startsWith('no_shared_room')) return ok(`✗ ${args.to} 와(과) 같은 방이 아닙니다 — 보낼 수 없습니다`)
-      if (reason.startsWith('room_not_shared')) return ok(`✗ '${args.room}' 은(는) ${args.to} 와(과) 공유하는 방이 아닙니다 — room 을 빼거나 공유 방을 넣으세요`)
       if (reason.startsWith('unknown_member')) return ok(`✗ '${args.to}' 라는 팀원이 없습니다 (team_status 로 확인)`)
-      return ok(`✗ 발신 실패: ${reason}`)
+      if (reason.startsWith('ambiguous_name')) {
+        const rooms = reason.split(':')[2] ?? ''
+        return ok(`✗ '${args.to}' 이(가) 여러 방에 있습니다 (${rooms}) — 어느 방인지 사용자에게 확인한 뒤 room 을 지정해 다시 보내세요`)
+      }
+      return ok(`✗ 발신 실패: ${renderSendError(reason)}`)
+    }
+    case 'team_reply': {
+      if (!wsReady) await connectWithConfig()
+      if (!wsReady) return ok('✗ 중계 서버에 연결돼 있지 않습니다 — /team-relay:join 으로 먼저 참가하세요')
+      // 서버가 reply 를 모르면(PROTO 3 미만) 보내 봐야 unknown_type 이다 — 이유를 먼저 말한다
+      if (serverProto < 3) {
+        return ok('✗ 중계 서버가 구버전이라 team_reply 를 지원하지 않습니다 — 관리자에게 서버 업데이트를 요청하세요. 그동안은 team_send 에 수신 태그의 room·thread 를 넣어 답할 수 있습니다.')
+      }
+      const thread = String(args.thread ?? '')
+      if (!thread) return ok('✗ thread 가 필요합니다 — 수신 메시지 태그의 thread 값을 그대로 넣으세요. 새 대화는 team_send 입니다.')
+      const frame: Record<string, unknown> = { type: 'reply', thread, text: args.message ?? '' }
+      if (args.expect === 'reply' || args.expect === 'none') frame.expect = args.expect
+      const res = await request(frame)
+      if (res.type === 'sent') return ok(renderSent(res, String(res.to ?? '')))
+      return ok(`✗ 답장 실패: ${renderSendError(String(res.reason ?? ''))}`)
     }
     case 'team_ack': {
       if (!wsReady) await connectWithConfig()

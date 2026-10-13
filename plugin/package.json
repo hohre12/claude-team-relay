@@ -1,7 +1,7 @@
 {
   "name": "team-relay-channel",
   "private": true,
-  "version": "0.7.6",
+  "version": "0.8.0",
   "scripts": {
     "start": "bun server.ts",
     "build": "bun check-version.ts && bun build server.ts --target=node --outfile dist/server.mjs",

@@ -1,6 +1,7 @@
 ---
 name: status
 description: 팀 연결 상태(이 세션 담당 방·방별 내 라벨·온라인 팀원·자동답장 토글)를 보여준다. 자동답장 전환 — /team-relay:status auto-reply off|on
+argument-hint: '[auto-reply on|off]'
 ---
 
 사용자가 `/team-relay:status` 를 실행했다.

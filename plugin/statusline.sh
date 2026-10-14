@@ -14,6 +14,21 @@ else
   SID=$(printf '%s' "$INPUT" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
   [ -n "$SID" ] || exit 0
   STATE="$DIR/state-$SID.json"
+
+  # 세션 이름 — /rename·--name 으로 붙인 이름(없으면 자동 제목). 플러그인은 이 값을 받을 길이
+  # 없어서(MCP 에는 오지 않는다) 여기서 파일로 건네준다. 플러그인이 관리 콘솔의 활동 로그에
+  # "세션 abc" 로 찍히게 서버에 알린다. 열쇠는 $PPID — 상태줄과 플러그인의 부모가 같은 claude
+  # 다(아래 ② 참고). 바뀔 때만 쓴다 — 상태줄은 자주 돈다.
+  if [ "$TEAM_RELAY_GATEWAY" = "1" ]; then
+    SNAME=$(printf '%s' "$INPUT" | sed -n 's/.*"session_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+    if [ -n "$SNAME" ]; then
+      NF="$DIR/name-$PPID"
+      if [ "$(cat "$NF" 2>/dev/null)" != "$SNAME" ]; then
+        mkdir -p "$DIR" 2>/dev/null
+        printf '%s' "$SNAME" > "$NF.$$.tmp" 2>/dev/null && mv -f "$NF.$$.tmp" "$NF" 2>/dev/null
+      fi
+    fi
+  fi
 fi
 
 NOW=$(date +%s)

@@ -1,6 +1,7 @@
 ---
 name: away
 description: 퇴근/출근 전환 — 퇴근하면 팀 메시지가 서버에 보관되고(기한 정지) 출근하면 한꺼번에 배달된다. 사용법 — /team-relay:away on|off
+argument-hint: 'on | off'
 ---
 
 사용자가 `/team-relay:away <on|off>` 를 실행했다.

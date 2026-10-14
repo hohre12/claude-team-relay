@@ -8,7 +8,7 @@
  * 쓰기는 config.json 과 같은 규칙(임시 파일 → rename, 0600)을 따른다. 여러 세션이 같은
  * 파일을 쓰므로 반쪽 파일이 남아선 안 된다.
  */
-import { chmodSync, mkdirSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { CONFIG_PATH } from './config'
 
@@ -52,10 +52,42 @@ export function sweepStaleStates(maxAgeMs = 60 * 60 * 1000, now = Date.now()): v
       const full = join(STATE_DIR, f)
       if (now - statSync(full).mtimeMs > maxAgeMs) unlinkSync(full)
     }
+    // 세션 이름 파일 — 바뀔 때만 쓰이므로 나이로는 못 가린다. 그 창(claude 프로세스)이 끝났으면 지운다
+    for (const f of readdirSync(STATE_DIR)) {
+      const m = /^name-(\d+)$/.exec(f)
+      if (m && !alive(Number(m[1]))) unlinkSync(join(STATE_DIR, f))
+    }
     // v0.7.0 의 단일 파일 잔재 — 남아 있으면 상태줄이 엉뚱한 값을 읽는다
     try { unlinkSync(join(STATE_DIR, 'state.json')) } catch { /* 없으면 그만 */ }
   } catch {
     /* 청소 실패는 무해하다 */
+  }
+}
+
+function alive(pid: number): boolean {
+  try { process.kill(pid, 0); return true } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM' }
+}
+
+/**
+ * 세션 이름 — `/rename`·`--name` 으로 붙인 이름(없으면 Claude Code 가 지은 제목).
+ *
+ * 플러그인(MCP 서버)에는 이 값이 오지 않는다. 환경변수에도 없다. **상태줄만** 받는다
+ * (statusline 입력 JSON 의 session_name). 그래서 상태줄 스크립트가 바뀔 때마다 파일로 적어 두고
+ * 플러그인이 읽는다. 열쇠는 세션 id 가 아니라 **부모 PID** 다 — 세션 id 는 어긋날 수 있지만
+ * (statePath 머리말) 상태줄과 플러그인의 부모는 같은 claude 프로세스다.
+ *
+ * 상태줄을 쓰지 않는 사람에게는 이름이 없다 — 콘솔은 세션 id 앞자리와 작업 폴더로 보여준다.
+ */
+export function namePath(ppid = process.ppid): string {
+  return join(STATE_DIR, `name-${ppid}`)
+}
+
+export function readSessionName(ppid = process.ppid): string | undefined {
+  try {
+    const t = readFileSync(namePath(ppid), 'utf8').replace(/[\u0000-\u001f\u007f]/g, '').trim()
+    return t ? t.slice(0, 120) : undefined
+  } catch {
+    return undefined
   }
 }
 

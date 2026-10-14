@@ -4,9 +4,11 @@
  *  · 수신: `notifications/claude/channel` 로 세션에 주입되어 <channel> 태그가 된다
  *  · 세션 식별: `CLAUDE_CODE_SESSION_ID` (2026-09-21 실측)
  *  · 수신 자격: `TEAM_RELAY_GATEWAY=1` (claude-team alias 가 선언)
+ *  · 작업 폴더: `CLAUDE_PROJECT_DIR` · 세션 이름: 상태줄이 적어 둔 파일 (core/state.ts readSessionName)
  */
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { SESSION_ID } from '../core/config'
+import { readSessionName } from '../core/state'
 import type { ChoiceSpec, Host } from './types'
 
 declare const Bun: { version: string } | undefined
@@ -16,6 +18,8 @@ export function createClaudeHost(mcp: Server): Host {
     sessionId: SESSION_ID,
     isGateway: process.env.TEAM_RELAY_GATEWAY === '1',
     runtime: typeof Bun !== 'undefined' ? `Bun ${Bun.version}` : `Node ${process.version}`,
+    workDir: process.env.CLAUDE_PROJECT_DIR || process.cwd(),
+    sessionName: () => readSessionName(),
     notify(content, meta = {}) {
       return mcp.notification({
         method: 'notifications/claude/channel',

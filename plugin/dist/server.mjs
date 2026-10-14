@@ -17801,9 +17801,9 @@ var ServerResultSchema2 = union([
 ]);
 
 // server.ts
-import { chmodSync as chmodSync4, mkdirSync as mkdirSync4, readFileSync as readFileSync3, readdirSync as readdirSync2, renameSync as renameSync4, statSync as statSync2, writeFileSync as writeFileSync4 } from "fs";
+import { chmodSync as chmodSync5, mkdirSync as mkdirSync5, readFileSync as readFileSync5, readdirSync as readdirSync3, renameSync as renameSync5, statSync as statSync3, writeFileSync as writeFileSync5 } from "fs";
 import { homedir as homedir3 } from "os";
-import { dirname as dirname5, join as join5 } from "path";
+import { dirname as dirname6, join as join6 } from "path";
 
 // core/protocol.ts
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -17816,8 +17816,8 @@ var SESSION_ID = process.env.CLAUDE_CODE_SESSION_ID ?? "";
 var CONFIG_PATH = process.env.TEAM_RELAY_CONFIG ?? join(homedir(), ".claude", "channels", "team-relay", "config.json");
 
 // core/version.ts
-var PROTO = 4;
-var PLUGIN_VERSION = "0.10.1";
+var PROTO = 5;
+var PLUGIN_VERSION = "0.10.2";
 
 // core/ws.ts
 var WS = globalThis.WebSocket ?? (await Promise.resolve().then(() => (init_wrapper(), exports_wrapper))).default;
@@ -17912,8 +17912,8 @@ function fetchWelcomeOnce(cfg, timeoutMs) {
 }
 
 // core/version.ts
-var PROTO2 = 4;
-var PLUGIN_VERSION2 = "0.10.1";
+var PROTO2 = 5;
+var PLUGIN_VERSION2 = "0.10.2";
 
 // core/rooms.ts
 function classifyRooms(rooms, held, heldByOther) {
@@ -17971,7 +17971,7 @@ function renderRoutes(routes) {
 }
 
 // core/state.ts
-import { chmodSync as chmodSync2, mkdirSync as mkdirSync2, readdirSync, renameSync as renameSync2, statSync, unlinkSync, writeFileSync as writeFileSync2 } from "node:fs";
+import { chmodSync as chmodSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync2, readdirSync, renameSync as renameSync2, statSync, unlinkSync, writeFileSync as writeFileSync2 } from "node:fs";
 import { dirname as dirname3, join as join3 } from "node:path";
 var STATE_DIR = dirname3(CONFIG_PATH);
 function statePath(sessionId) {
@@ -17986,10 +17986,23 @@ function sweepStaleStates(maxAgeMs = 60 * 60 * 1000, now = Date.now()) {
       if (now - statSync(full).mtimeMs > maxAgeMs)
         unlinkSync(full);
     }
+    for (const f of readdirSync(STATE_DIR)) {
+      const m = /^name-(\d+)$/.exec(f);
+      if (m && !alive(Number(m[1])))
+        unlinkSync(join3(STATE_DIR, f));
+    }
     try {
       unlinkSync(join3(STATE_DIR, "state.json"));
     } catch {}
   } catch {}
+}
+function alive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === "EPERM";
+  }
 }
 function writeState(s) {
   if (!s.sessionId)
@@ -18010,12 +18023,30 @@ function writeState(s) {
 var WS2 = globalThis.WebSocket ?? (await Promise.resolve().then(() => (init_wrapper(), exports_wrapper))).default;
 var ws_default2 = WS2;
 
+// core/state.ts
+import { chmodSync as chmodSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync3, readdirSync as readdirSync2, renameSync as renameSync3, statSync as statSync2, unlinkSync as unlinkSync2, writeFileSync as writeFileSync3 } from "node:fs";
+import { dirname as dirname4, join as join4 } from "node:path";
+var STATE_DIR2 = dirname4(CONFIG_PATH);
+function namePath(ppid = process.ppid) {
+  return join4(STATE_DIR2, `name-${ppid}`);
+}
+function readSessionName(ppid = process.ppid) {
+  try {
+    const t = readFileSync3(namePath(ppid), "utf8").replace(/[\u0000-\u001f\u007f]/g, "").trim();
+    return t ? t.slice(0, 120) : undefined;
+  } catch {
+    return;
+  }
+}
+
 // host/claude.ts
 function createClaudeHost(mcp) {
   return {
     sessionId: SESSION_ID,
     isGateway: process.env.TEAM_RELAY_GATEWAY === "1",
     runtime: typeof Bun !== "undefined" ? `Bun ${Bun.version}` : `Node ${process.version}`,
+    workDir: process.env.CLAUDE_PROJECT_DIR || process.cwd(),
+    sessionName: () => readSessionName(),
     notify(content, meta2 = {}) {
       return mcp.notification({
         method: "notifications/claude/channel",
@@ -18054,9 +18085,9 @@ function createClaudeHost(mcp) {
 }
 
 // core/config.ts
-import { chmodSync as chmodSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync2, renameSync as renameSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { chmodSync as chmodSync4, mkdirSync as mkdirSync4, readFileSync as readFileSync4, renameSync as renameSync4, writeFileSync as writeFileSync4 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { dirname as dirname4, join as join4 } from "node:path";
+import { dirname as dirname5, join as join5 } from "node:path";
 var SESSION_ID2 = process.env.CLAUDE_CODE_SESSION_ID ?? "";
 var SESSION_KEEP = 50;
 function myRooms(cfg) {
@@ -18076,10 +18107,10 @@ function bindRooms(cfg, rooms) {
       delete sessions[k];
   return { ...cfg, sessions };
 }
-var CONFIG_PATH2 = process.env.TEAM_RELAY_CONFIG ?? join4(homedir2(), ".claude", "channels", "team-relay", "config.json");
+var CONFIG_PATH2 = process.env.TEAM_RELAY_CONFIG ?? join5(homedir2(), ".claude", "channels", "team-relay", "config.json");
 function loadConfig() {
   try {
-    const cfg = JSON.parse(readFileSync2(CONFIG_PATH2, "utf8"));
+    const cfg = JSON.parse(readFileSync4(CONFIG_PATH2, "utf8"));
     if (cfg.name && !cfg.rooms)
       cfg.rooms = {};
     return cfg;
@@ -18088,7 +18119,7 @@ function loadConfig() {
   }
 }
 function saveConfig(cfg, opts = {}) {
-  mkdirSync3(dirname4(CONFIG_PATH2), { recursive: true });
+  mkdirSync4(dirname5(CONFIG_PATH2), { recursive: true });
   const disk = loadConfig();
   const next = { ...disk ?? {}, ...cfg };
   if (disk) {
@@ -18110,9 +18141,9 @@ function saveConfig(cfg, opts = {}) {
   if (opts.roomsFromServer)
     delete next.name;
   const tmp = CONFIG_PATH2 + ".tmp";
-  writeFileSync3(tmp, JSON.stringify(next, null, 2), { mode: 384 });
-  chmodSync3(tmp, 384);
-  renameSync3(tmp, CONFIG_PATH2);
+  writeFileSync4(tmp, JSON.stringify(next, null, 2), { mode: 384 });
+  chmodSync4(tmp, 384);
+  renameSync4(tmp, CONFIG_PATH2);
 }
 function normalizeUrl(address) {
   let u = address.trim();
@@ -18125,24 +18156,24 @@ function normalizeUrl(address) {
 
 // server.ts
 var PKG_DIR = new URL(".", import.meta.url).pathname;
-var PLUGIN_DIR = /\/dist\/?$/.test(PKG_DIR) ? dirname5(PKG_DIR.replace(/\/$/, "")) : PKG_DIR.replace(/\/$/, "");
-var STATUSLINE_PATH = join5(dirname5(CONFIG_PATH2), "statusline.sh");
+var PLUGIN_DIR = /\/dist\/?$/.test(PKG_DIR) ? dirname6(PKG_DIR.replace(/\/$/, "")) : PKG_DIR.replace(/\/$/, "");
+var STATUSLINE_PATH = join6(dirname6(CONFIG_PATH2), "statusline.sh");
 var STATUSLINE_CONFIG_PATH = STATUSLINE_PATH.startsWith(homedir3() + "/") ? `~${STATUSLINE_PATH.slice(homedir3().length)}` : STATUSLINE_PATH;
 function installStatusline() {
   try {
-    const src = join5(PLUGIN_DIR, "statusline.sh");
-    const body = readFileSync3(src, "utf8");
+    const src = join6(PLUGIN_DIR, "statusline.sh");
+    const body = readFileSync5(src, "utf8");
     let current = null;
     try {
-      current = readFileSync3(STATUSLINE_PATH, "utf8");
+      current = readFileSync5(STATUSLINE_PATH, "utf8");
     } catch {}
     if (current === body)
       return;
-    mkdirSync4(dirname5(STATUSLINE_PATH), { recursive: true });
+    mkdirSync5(dirname6(STATUSLINE_PATH), { recursive: true });
     const tmp = `${STATUSLINE_PATH}.${process.pid}.tmp`;
-    writeFileSync4(tmp, body, { mode: 493 });
-    renameSync4(tmp, STATUSLINE_PATH);
-    chmodSync4(STATUSLINE_PATH, 493);
+    writeFileSync5(tmp, body, { mode: 493 });
+    renameSync5(tmp, STATUSLINE_PATH);
+    chmodSync5(STATUSLINE_PATH, 493);
   } catch {}
 }
 var REQUEST_TIMEOUT_MS = Number(process.env.TEAM_RELAY_REQUEST_TIMEOUT_MS ?? 5000);
@@ -18182,6 +18213,22 @@ function memorySection() {
 }
 var heldRooms = [];
 var serverProto = 0;
+var sentName;
+function sessionFields() {
+  sentName = host.sessionName();
+  return { dir: host.workDir, ...sentName ? { name: sentName } : {} };
+}
+function syncSessionName() {
+  if (!wsReady || serverProto < 5)
+    return;
+  const name = host.sessionName();
+  if (!name || name === sentName)
+    return;
+  sentName = name;
+  request({ type: "session_info", name }).catch(() => {
+    sentName = undefined;
+  });
+}
 var lastError = null;
 var lastEmpty = [];
 var lastQueued = 0;
@@ -18467,7 +18514,8 @@ async function connectWithConfig() {
         token: cfg.token,
         gateway: host.isGateway,
         session: host.sessionId,
-        rooms: host.isGateway ? myRooms(cfg) : []
+        rooms: host.isGateway ? myRooms(cfg) : [],
+        ...sessionFields()
       }).then((frame) => {
         if (frame.type === "welcome") {
           wsReady = true;
@@ -18864,7 +18912,8 @@ mcp.setRequestHandler(CallToolRequestSchema2, async (req) => {
             token,
             gateway: host.isGateway,
             session: host.sessionId,
-            rooms: newRoom ? [newRoom] : []
+            rooms: newRoom ? [newRoom] : [],
+            ...sessionFields()
           });
         } catch {
           if (ws) {
@@ -19304,16 +19353,16 @@ ${renderRooms(list)}`;
         const labels = Object.entries(cfg.rooms ?? {}).map(([r, l]) => `${r}(${l})`).join(", ");
         check(true, "\uC124\uC815", `${labels || "(\uCC38\uAC00\uD55C \uBC29 \uC5C6\uC74C)"} @ ${cfg.url}`);
         try {
-          const mode = statSync2(CONFIG_PATH2).mode & 511;
+          const mode = statSync3(CONFIG_PATH2).mode & 511;
           check(mode === 384, "\uC124\uC815 \uAD8C\uD55C", `0${mode.toString(8)}`, `chmod 600 ${CONFIG_PATH2} \uB97C \uC2E4\uD589\uD558\uC138\uC694 (\uD1A0\uD070 \uBCF4\uD638)`);
         } catch {}
       }
       check(host.isGateway, "\uD300 \uC138\uC158", host.isGateway ? "\uC608 (claude-team)" : "\uC544\uB2C8\uC694 \u2014 \uC774 \uC138\uC158\uC5D0\uC11C\uB294 team-relay \uB97C \uC4F8 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4", "\uD300 \uAE30\uB2A5\uC740 claude-team \uC73C\uB85C \uCF20 \uC138\uC158\uC5D0\uC11C\uB9CC \uC501\uB2C8\uB2E4 \u2014 \uADF8 \uC138\uC158\uC5D0\uC11C /team-relay:doctor \uB97C \uB2E4\uC2DC \uC2E4\uD589\uD558\uC138\uC694");
       check(true, "\uB7F0\uD0C0\uC784", `${host.runtime} \xB7 \uD50C\uB7EC\uADF8\uC778 v${PLUGIN_VERSION2} \xB7 \uD504\uB85C\uD1A0\uCF5C v${PROTO2}`);
       const pkgVersion = (() => {
-        for (const dir of [PKG_DIR, dirname5(PKG_DIR.replace(/\/$/, ""))]) {
+        for (const dir of [PKG_DIR, dirname6(PKG_DIR.replace(/\/$/, ""))]) {
           try {
-            const v = JSON.parse(readFileSync3(join5(dir, "package.json"), "utf8")).version;
+            const v = JSON.parse(readFileSync5(join6(dir, "package.json"), "utf8")).version;
             if (v)
               return v;
           } catch {}
@@ -19332,7 +19381,7 @@ ${renderRooms(list)}`;
       }
       const newerInstalled = (() => {
         try {
-          const versionsDir = dirname5(dirname5(PLUGIN_DIR));
+          const versionsDir = dirname6(dirname6(PLUGIN_DIR));
           const cmp = (a, b) => {
             const pa = a.split(".").map(Number), pb = b.split(".").map(Number);
             for (let i = 0;i < 3; i++)
@@ -19340,7 +19389,7 @@ ${renderRooms(list)}`;
                 return (pa[i] ?? 0) - (pb[i] ?? 0);
             return 0;
           };
-          const found = readdirSync2(versionsDir).filter((d) => /^\d+\.\d+\.\d+$/.test(d) && cmp(d, PLUGIN_VERSION2) > 0).sort(cmp);
+          const found = readdirSync3(versionsDir).filter((d) => /^\d+\.\d+\.\d+$/.test(d) && cmp(d, PLUGIN_VERSION2) > 0).sort(cmp);
           return found.length ? found[found.length - 1] : null;
         } catch {
           return null;
@@ -19351,7 +19400,7 @@ ${renderRooms(list)}`;
       }
       const settingsRaw = (() => {
         try {
-          return readFileSync3(join5(homedir3(), ".claude", "settings.json"), "utf8");
+          return readFileSync5(join6(homedir3(), ".claude", "settings.json"), "utf8");
         } catch {
           return null;
         }
@@ -19497,6 +19546,7 @@ if (host.isGateway) {
       exportState();
       return;
     }
+    syncSessionName();
     request({ type: "doctor" }).then((d) => {
       if (d.type === "doctor") {
         lastQueued = Number(d.queueForMe ?? 0);

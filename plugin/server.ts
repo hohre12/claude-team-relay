@@ -126,6 +126,27 @@ function memorySection(): string {
 let heldRooms: string[] = []
 /** 서버의 와이어 프로토콜 — 3 이상이어야 reply 프레임을 안다 (team_reply) */
 let serverProto = 0
+/** 서버에 마지막으로 알린 세션 이름 — 바뀌었을 때만 session_info 를 보낸다 */
+let sentName: string | undefined
+
+/**
+ * hello 에 싣는 세션 정보 (PROTO 5) — 작업 폴더와 세션 이름. 관리자가 활동 로그에서
+ * "누가 **어느 세션에서**" 를 알아보게 한다 (id 앞자리만으로는 사람이 못 알아본다).
+ * 옛 서버는 모르는 필드를 무시한다.
+ */
+function sessionFields(): { dir: string; name?: string } {
+  sentName = host.sessionName()
+  return { dir: host.workDir, ...(sentName ? { name: sentName } : {}) }
+}
+
+/** 세션 도중에 /rename 했으면 알린다 — 상태줄이 파일을 고친 다음 하트비트에 실린다 */
+function syncSessionName(): void {
+  if (!wsReady || serverProto < 5) return
+  const name = host.sessionName()
+  if (!name || name === sentName) return
+  sentName = name
+  void request({ type: 'session_info', name }).catch(() => { sentName = undefined }) // 다음 박동에 다시
+}
 
 /** 마지막 치명 사유 — statusline 이 "왜 안 되는지"까지 보여줄 수 있게 (v0.7 §3.3) */
 let lastError: string | null = null
@@ -483,7 +504,7 @@ async function connectWithConfig(): Promise<RelayFrame | null> {
       ws = s
       void request({
         type: 'hello', v: PROTO, plugin: PLUGIN_VERSION, token: cfg.token, gateway: host.isGateway,
-        session: host.sessionId, rooms: host.isGateway ? myRooms(cfg) : [],
+        session: host.sessionId, rooms: host.isGateway ? myRooms(cfg) : [], ...sessionFields(),
       }).then(
         frame => {
           if (frame.type === 'welcome') {
@@ -905,7 +926,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       try {
         welcome = await request({
           type: 'hello', v: PROTO, plugin: PLUGIN_VERSION, token, gateway: host.isGateway,
-          session: host.sessionId, rooms: newRoom ? [newRoom] : [],
+          session: host.sessionId, rooms: newRoom ? [newRoom] : [], ...sessionFields(),
         })
       } catch {
         // hello 무응답 — 유령 소켓을 남기지 않고(리뷰 C1) 백그라운드 재시도로 넘긴다
@@ -1521,6 +1542,7 @@ if (host.isGateway) {
 
   const beat = setInterval(() => {
     if (!wsReady) { exportState(); return }
+    syncSessionName()
     void request({ type: 'doctor' }).then(
       d => {
         if (d.type === 'doctor') {

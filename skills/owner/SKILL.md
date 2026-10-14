@@ -1,6 +1,7 @@
 ---
 name: owner
-description: 방장 전용 — 내가 방장인 방의 초대코드 발급·방 단위 추방·방 전원 공지·방 메모리 관리. 사용법 — /team-relay:owner invite|kick|notice|memory <방> ...
+description: 방장 전용 — 내가 방장인 방의 초대코드 발급·방 단위 추방·방 전원 공지·방 메모리 관리. 사용법 — /team-relay:owner invite|kick|notice|memory <방> [이름·내용]
+argument-hint: 'invite|kick|notice|memory <방> [이름 또는 내용]'
 ---
 
 사용자가 `/team-relay:owner <동작> <방> ...` 를 실행했다. 방장 지정은 서버 관리자가 한다.

@@ -1,6 +1,7 @@
 ---
 name: join
 description: 팀 중계 서버에 참가한다 (최초 1회 또는 추가 방 합류). 사용법 — /team-relay:join <서버주소> <초대코드>
+argument-hint: '<서버주소> <초대코드>'
 ---
 
 사용자가 `/team-relay:join <서버주소> <초대코드>` 를 실행했다.

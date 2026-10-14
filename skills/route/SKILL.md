@@ -1,6 +1,7 @@
 ---
 name: route
 description: 팀 질문의 로컬 위임 등록표를 관리한다. /team-relay:route (목록) · /team-relay:route add "<키워드>" <세션> · /team-relay:route add --room <방> <세션> · /team-relay:route remove "<키워드>"|--room <방>
+argument-hint: '[add "<키워드>" <세션> | add --room <방> <세션> | remove "<키워드>" | remove --room <방>]'
 ---
 
 사용자가 `/team-relay:route` 를 실행했다. 등록표는 "이런 키워드의 팀 질문이 오면 이 머신의

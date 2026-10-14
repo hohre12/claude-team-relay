@@ -1,6 +1,7 @@
 ---
 name: room
 description: 이 세션이 담당할 방을 지정한다 (초대코드 불필요 — 이미 참가한 방 중에서). 사용법 — /team-relay:room [<방이름>]
+argument-hint: '[방이름 · 여럿은 쉼표로]'
 ---
 
 사용자가 `/team-relay:room [<방>]` 을 실행했다.

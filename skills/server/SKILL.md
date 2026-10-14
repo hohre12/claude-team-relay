@@ -1,6 +1,7 @@
 ---
 name: server
 description: 중계 서버 주소를 변경한다 (서버 이사 — 초대코드 불필요, 토큰 유지). 사용법 — /team-relay:server <새서버주소>
+argument-hint: '<새서버주소>'
 ---
 
 사용자가 `/team-relay:server <새서버주소>` 를 실행했다. 서버 이사(관리자가 명부 데이터를 새

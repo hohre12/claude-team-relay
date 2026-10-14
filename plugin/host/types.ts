@@ -12,6 +12,10 @@ export interface Host {
   readonly isGateway: boolean
   /** 런타임 표시 문자열 — 진단용 */
   readonly runtime: string
+  /** 작업 폴더 — 관리 콘솔의 활동 로그가 "어느 세션" 을 사람 말로 보여준다 */
+  readonly workDir: string
+  /** 세션 이름 (/rename 등) — 모르면 undefined. 세션 도중에 바뀔 수 있어 매번 읽는다 */
+  sessionName(): string | undefined
   /**
    * 사용자·모델에게 보이는 **유일한 출구**.
    * Claude Code 는 채널 알림으로 세션에 주입하고, 다른 호스트는 다른 수단을 쓸 수 있다.

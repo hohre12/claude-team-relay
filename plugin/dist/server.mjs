@@ -17817,7 +17817,7 @@ var CONFIG_PATH = process.env.TEAM_RELAY_CONFIG ?? join(homedir(), ".claude", "c
 
 // core/version.ts
 var PROTO = 4;
-var PLUGIN_VERSION = "0.9.0";
+var PLUGIN_VERSION = "0.10.0";
 
 // core/ws.ts
 var WS = globalThis.WebSocket ?? (await Promise.resolve().then(() => (init_wrapper(), exports_wrapper))).default;
@@ -17913,7 +17913,7 @@ function fetchWelcomeOnce(cfg, timeoutMs) {
 
 // core/version.ts
 var PROTO2 = 4;
-var PLUGIN_VERSION2 = "0.9.0";
+var PLUGIN_VERSION2 = "0.10.0";
 
 // core/rooms.ts
 function classifyRooms(rooms, held, heldByOther) {
@@ -18146,12 +18146,15 @@ function installStatusline() {
   } catch {}
 }
 var REQUEST_TIMEOUT_MS = Number(process.env.TEAM_RELAY_REQUEST_TIMEOUT_MS ?? 5000);
+var IS_TEAM = process.env.TEAM_RELAY_GATEWAY === "1";
+var NOT_TEAM = "\uC774 \uC138\uC158\uC5D0\uC11C\uB294 team-relay \uB97C \uC4F8 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4 \u2014 claude-team \uC73C\uB85C \uC2E4\uD589\uD588\uB294\uC9C0 \uD655\uC778\uD574\uC8FC\uC138\uC694";
+var LOCAL_TOOLS = new Set(["team_doctor", "team_route"]);
 var protocolCache = loadProtocolCache();
 var memoryCache = loadMemoryCache();
 var memoryFresh = false;
 {
   const cfg0 = loadConfig();
-  const got = cfg0 ? await fetchWelcomeOnce(cfg0, PROTOCOL_TIMEOUT_MS) : null;
+  const got = cfg0 && IS_TEAM ? await fetchWelcomeOnce(cfg0, PROTOCOL_TIMEOUT_MS) : null;
   if (got?.protocol) {
     protocolCache = got.protocol;
     try {
@@ -18275,9 +18278,9 @@ var mcp = new Server({ name: "team-relay", version: PLUGIN_VERSION2 }, {
     experimental: { "claude/channel": {} },
     tools: {}
   },
-  instructions: [protocolCache?.instructions ?? FALLBACK_INSTRUCTIONS, memorySection()].filter(Boolean).join(`
+  instructions: IS_TEAM ? [protocolCache?.instructions ?? FALLBACK_INSTRUCTIONS, memorySection()].filter(Boolean).join(`
 
-`)
+`) : "team-relay: \uC774 \uC138\uC158\uC740 \uD300 \uC138\uC158\uC774 \uC544\uB2C8\uB2E4 \u2014 \uD300 \uAE30\uB2A5(\uD300\uC6D0\uC5D0\uAC8C \uBB3B\uAE30\xB7\uB2F5\uC7A5 \uB4F1)\uC740 claude-team \uC73C\uB85C \uCF20 \uC138\uC158\uC5D0\uC11C\uB9CC \uC4F4\uB2E4."
 });
 var host = createClaudeHost(mcp);
 var ws = null;
@@ -18566,7 +18569,7 @@ function renderMemoryDoc(room, m) {
   const lines = [`'${room}' \uBC29 \uBA54\uBAA8\uB9AC${m.updatedBy ? ` (\uB9C8\uC9C0\uB9C9 \uC218\uC815 ${m.updatedBy})` : ""}`];
   if (m.description)
     lines.push(`\uC124\uBA85  ${m.description}`);
-  m.items.forEach((it, i) => lines.push(`${i + 1}. ${it.text}  \u2014 \uBAA8\uB974\uBA74: ${it.unknown}`));
+  m.items.forEach((it, i) => lines.push(`${i + 1}. ${it.text}`));
   if (m.items.length < 3)
     lines.push(`(\uD56D\uBAA9 ${m.items.length}/3)`);
   return lines.join(`
@@ -18575,8 +18578,6 @@ function renderMemoryDoc(room, m) {
 function renderMemoryError(reason) {
   if (reason.startsWith("memory_conflict"))
     return "\uADF8\uC0AC\uC774 \uB2E4\uB978 \uACF3(\uAD00\uB9AC\uC790\xB7\uB2E4\uB978 \uC138\uC158)\uC5D0\uC11C \uBA3C\uC800 \uACE0\uCCE4\uC2B5\uB2C8\uB2E4 \u2014 view \uB85C \uCD5C\uC2E0 \uB0B4\uC6A9\uC744 \uBCF4\uACE0 \uB2E4\uC2DC \uD558\uC138\uC694";
-  if (reason.startsWith("memory_item_unknown_required"))
-    return "'\uBAA8\uB974\uBA74'(unknown)\uC774 \uD544\uC694\uD569\uB2C8\uB2E4 \u2014 \uCC44\uC6B8 \uC218 \uC5C6\uB2E4\uBA74 \uBA54\uBAA8\uB9AC\uC5D0 \uB123\uC744 \uB0B4\uC6A9\uC774 \uC544\uB2D9\uB2C8\uB2E4";
   if (reason.startsWith("memory_item_text_required"))
     return "\uD56D\uBAA9 \uB0B4\uC6A9(text)\uC774 \uD544\uC694\uD569\uB2C8\uB2E4";
   if (reason.startsWith("memory_too_long"))
@@ -18742,14 +18743,13 @@ mcp.setRequestHandler(ListToolsRequestSchema2, async () => ({
     },
     {
       name: "team_memory",
-      description: "\uBC29 \uBA54\uBAA8\uB9AC \u2014 \uBC29\uC7A5\xB7\uAD00\uB9AC\uC790\uAC00 \uBC29\uB9C8\uB2E4 \uC815\uB9AC\uD55C \uC9E7\uC740 \uC0AC\uC2E4(\uC124\uBA85 + \uD56D\uBAA9 \uCD5C\uB300 3, \uCE78\uB9C8\uB2E4 150\uC790)\uC774\uB2E4. \uC138\uC158\uC774 \uC2DC\uC791\uD560 \uB54C \uC774\uBBF8 \uC2DC\uC2A4\uD15C \uD504\uB86C\uD504\uD2B8\uC5D0 \uB4E4\uC5B4 \uC788\uC73C\uB2C8 \uB530\uB85C \uC870\uD68C\uD560 \uD544\uC694\uB294 \uC5C6\uB2E4(view \uB294 \uC9C0\uAE08 \uB0B4\uC6A9\uC744 \uB2E4\uC2DC \uBCFC \uB54C). " + "\uC0AC\uC6A9\uC790\uC5D0\uAC8C \uBB3C\uC5B4\uC11C \uC5BB\uC740 \uB2F5\uC774 **\uCF54\uB4DC\uB97C \uC77D\uC5B4\uC11C\uB294 \uC54C \uC218 \uC5C6\uACE0 \uC55E\uC73C\uB85C\uB3C4 \uB9E4\uBC88 \uAC19\uC744 \uAC83 \uAC19\uC73C\uBA74** propose \uB85C \uC81C\uC548\uD55C\uB2E4 \u2014 \uBC29\uC7A5(\uC5C6\uC73C\uBA74 \uAD00\uB9AC\uC790)\uC774 \uC2B9\uC778\uD558\uBA74 \uADF8 \uBC29 \uBAA8\uB4E0 \uC138\uC158\uC5D0 \uB4E4\uC5B4\uAC04\uB2E4. " + "\uBC29\uC7A5\uC774\uBA74 describe(\uC124\uBA85)\xB7add\xB7edit\xB7remove(\uD56D\uBAA9)\uB85C \uC9C1\uC811 \uACE0\uCE58\uACE0 approve\xB7reject \uB85C \uC81C\uC548\uC744 \uCC98\uB9AC\uD55C\uB2E4.",
+      description: "\uBC29 \uBA54\uBAA8\uB9AC \u2014 \uBC29\uC7A5\xB7\uAD00\uB9AC\uC790\uAC00 \uBC29\uB9C8\uB2E4 \uC815\uB9AC\uD55C \uC9E7\uC740 \uC0AC\uC2E4(\uC124\uBA85 1 + \uB0B4\uC6A9 \uCD5C\uB300 3, \uCE78\uB9C8\uB2E4 150\uC790)\uC774\uB2E4. \uC138\uC158\uC774 \uC2DC\uC791\uD560 \uB54C \uC774\uBBF8 \uC2DC\uC2A4\uD15C \uD504\uB86C\uD504\uD2B8\uC5D0 \uB4E4\uC5B4 \uC788\uC73C\uB2C8 \uB530\uB85C \uC870\uD68C\uD560 \uD544\uC694\uB294 \uC5C6\uB2E4(view \uB294 \uC9C0\uAE08 \uB0B4\uC6A9\uC744 \uB2E4\uC2DC \uBCFC \uB54C). " + "\uC0AC\uC6A9\uC790\uC5D0\uAC8C \uBB3C\uC5B4\uC11C \uC5BB\uC740 \uB2F5\uC774 **\uCF54\uB4DC\uB97C \uC77D\uC5B4\uC11C\uB294 \uC54C \uC218 \uC5C6\uACE0 \uC55E\uC73C\uB85C\uB3C4 \uB9E4\uBC88 \uAC19\uC744 \uAC83 \uAC19\uC73C\uBA74** propose \uB85C \uC81C\uC548\uD55C\uB2E4 \u2014 \uBC29\uC7A5(\uC5C6\uC73C\uBA74 \uAD00\uB9AC\uC790)\uC774 \uC2B9\uC778\uD558\uBA74 \uADF8 \uBC29 \uBAA8\uB4E0 \uC138\uC158\uC5D0 \uB4E4\uC5B4\uAC04\uB2E4. " + "\uBC29\uC7A5\uC774\uBA74 describe(\uC124\uBA85)\xB7add\xB7edit\xB7remove(\uD56D\uBAA9)\uB85C \uC9C1\uC811 \uACE0\uCE58\uACE0 approve\xB7reject \uB85C \uC81C\uC548\uC744 \uCC98\uB9AC\uD55C\uB2E4.",
       inputSchema: {
         type: "object",
         properties: {
           action: { type: "string", enum: ["view", "propose", "describe", "add", "edit", "remove", "approve", "reject"], description: "\uC218\uD589\uD560 \uB3D9\uC791" },
           room: { type: "string", description: "\uBC29 (\uC0DD\uB7B5\uD558\uBA74 \uC774 \uC138\uC158\uC758 \uB2F4\uB2F9 \uBC29 \u2014 \uB2F4\uB2F9\uC774 \uC5EC\uB7FF\uC774\uBA74 \uD544\uC218)" },
-          text: { type: "string", description: 'propose\xB7add\xB7edit: \uD56D\uBAA9 \uB0B4\uC6A9 (\uC608: "\uAE08\uC694\uC77C \uBC30\uD3EC \uAE08\uC9C0") \xB7 describe: \uBC29 \uC124\uBA85 (\uBE48 \uBB38\uC790\uC5F4\uC774\uBA74 \uC9C0\uC6C0)' },
-          unknown: { type: "string", description: 'propose\xB7add\xB7edit: \uBAA8\uB974\uBA74 \uC0DD\uAE30\uB294 \uC77C (\uC608: "\uC8FC\uB9D0\uC5D0 \uC0AC\uB78C\uC774 \uD638\uCD9C\uB41C\uB2E4") \u2014 \uD544\uC218. \uCC44\uC6B8 \uC218 \uC5C6\uB2E4\uBA74 \uBA54\uBAA8\uB9AC\uC5D0 \uB123\uC744 \uB0B4\uC6A9\uC774 \uC544\uB2C8\uB2E4' },
+          text: { type: "string", description: 'propose\xB7add\xB7edit: \uB0B4\uC6A9 \uD55C \uBB38\uC7A5 (\uC608: "\uAE08\uC694\uC77C \uBC30\uD3EC \uAE08\uC9C0 \u2014 \uC8FC\uB9D0 \uD638\uCD9C \uBC29\uC9C0") \xB7 describe: \uBC29 \uC124\uBA85 (\uBE48 \uBB38\uC790\uC5F4\uC774\uBA74 \uC9C0\uC6C0)' },
           pos: { type: "string", description: "edit\xB7remove: \uD56D\uBAA9 \uBC88\uD638 (1~3)" },
           proposal_id: { type: "string", description: "approve\xB7reject: \uC81C\uC548 id (mp-\u2026)" },
           replace: { type: "string", description: "approve: 3\uCE78\uC774 \uB2E4 \uCC3C\uC744 \uB54C \uC774 \uC81C\uC548\uC73C\uB85C \uBC14\uAFC0 \uD56D\uBAA9 \uBC88\uD638" },
@@ -18814,6 +18814,8 @@ mcp.setRequestHandler(ListToolsRequestSchema2, async () => ({
 }));
 mcp.setRequestHandler(CallToolRequestSchema2, async (req) => {
   const args = req.params.arguments ?? {};
+  if (!IS_TEAM && !LOCAL_TOOLS.has(req.params.name))
+    return ok(`\u2717 ${NOT_TEAM}`);
   switch (req.params.name) {
     case "team_join": {
       const url = normalizeUrl(args.address ?? "");
@@ -19034,7 +19036,7 @@ ${renderMemoryDoc(String(res2.room), res2.memory)}` : `\u2713 \uC81C\uC548\uC744
       if (!room)
         return ok(`\u2717 \uC5B4\uB290 \uBC29\uC778\uC9C0 room \uC744 \uC9C0\uC815\uD558\uC138\uC694 \u2014 \uC774 \uC138\uC158 \uB2F4\uB2F9: ${heldRooms.join(", ") || "(\uC5C6\uC74C)"}`);
       if (action === "propose") {
-        const res2 = await request({ type: "memory_propose", room, text: args.text ?? "", unknown: args.unknown ?? "" });
+        const res2 = await request({ type: "memory_propose", room, text: args.text ?? "" });
         if (res2.type !== "memory_proposed")
           return ok(`\u2717 ${renderMemoryError(String(res2.reason ?? ""))}`);
         const where = res2.to === "owner" ? "\uBC29\uC7A5\uC5D0\uAC8C \uC804\uB2EC\uD588\uC2B5\uB2C8\uB2E4" : res2.to === "queued" ? "\uBC29\uC7A5\uC774 \uC624\uD504\uB77C\uC778 \u2014 \uC811\uC18D\uD558\uBA74 \uC804\uB2EC\uB429\uB2C8\uB2E4" : res2.to === "self" ? "\uBC29\uC7A5\uC774\uC2DC\uB2C8 add \uB85C \uBC14\uB85C \uB123\uC744 \uC218\uB3C4 \uC788\uC2B5\uB2C8\uB2E4" : "\uBC29\uC7A5\uC774 \uC5C6\uC5B4 \uAD00\uB9AC\uC790\uAC00 \uCF58\uC194\uC5D0\uC11C \uCC98\uB9AC\uD569\uB2C8\uB2E4";
@@ -19049,7 +19051,7 @@ ${renderMemoryDoc(String(res2.room), res2.memory)}` : `\u2713 \uC81C\uC548\uC744
         const tail = props.length ? `
 
 \uB300\uAE30 \uC911\uC778 \uC81C\uC548:
-` + props.map((p) => `  ${p.id} \xB7 ${p.fromLabel}: ${p.text} (\uBAA8\uB974\uBA74: ${p.unknown})`).join(`
+` + props.map((p) => `  ${p.id} \xB7 ${p.fromLabel}: ${p.text}`).join(`
 `) : "";
         return ok(renderMemoryDoc(room, cur) + tail);
       }
@@ -19062,11 +19064,11 @@ ${renderMemoryDoc(String(res2.room), res2.memory)}` : `\u2713 \uC81C\uC548\uC744
       if (action === "describe")
         description = String(args.text ?? "");
       else if (action === "add")
-        items.push({ text: String(args.text ?? ""), unknown: String(args.unknown ?? "") });
+        items.push({ text: String(args.text ?? "") });
       else if (action === "edit") {
         if (!inRange)
           return ok(`\u2717 pos \uB294 1~${items.length} \uC911 \uD558\uB098\uC5EC\uC57C \uD569\uB2C8\uB2E4`);
-        items[pos - 1] = { text: String(args.text ?? items[pos - 1].text), unknown: String(args.unknown ?? items[pos - 1].unknown) };
+        items[pos - 1] = { text: String(args.text ?? items[pos - 1].text) };
       } else if (action === "remove") {
         if (!inRange)
           return ok(`\u2717 pos \uB294 1~${items.length} \uC911 \uD558\uB098\uC5EC\uC57C \uD569\uB2C8\uB2E4`);
@@ -19147,24 +19149,16 @@ ${renderRooms(list)}`;
         const selectable = list.filter((r) => r.mark !== "mine");
         if (selectable.length === 0)
           return ok(body);
-        const NONE = "__none__";
         const picked = await host.choose({
           message: "\uC774 \uC138\uC158\uC774 \uBC1B\uC744 \uBC29\uC744 \uACE0\uB974\uC138\uC694",
           title: "\uB2F4\uB2F9\uD560 \uBC29",
-          options: [
-            ...list.map((r) => ({ value: r.room, label: choiceLabel(r) })),
-            { value: NONE, label: "\uBC1B\uC9C0 \uC54A\uC74C (\uBC1C\uC2E0 \uC804\uC6A9\uC73C\uB85C \uB461\uB2C8\uB2E4)" }
-          ]
+          options: list.map((r) => ({ value: r.room, label: choiceLabel(r) }))
         });
         if (picked === null) {
           return ok(`${body}
 
 \u2192 /team-relay:room <\uBC29\uC774\uB984> \uC73C\uB85C \uC9C0\uC815\uD558\uC138\uC694`);
         }
-        if (picked === NONE)
-          return ok(`${body}
-
-\uB2F4\uB2F9\uC744 \uBCC0\uACBD\uD558\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4 (\uC774 \uC138\uC158\uC740 \uBC1C\uC2E0 \uC804\uC6A9\uC785\uB2C8\uB2E4)`);
         chosen = picked;
       }
       const wanted = (chosen ?? args.rooms).split(",").map((r) => r.trim()).filter(Boolean);
@@ -19314,7 +19308,7 @@ ${renderRooms(list)}`;
           check(mode === 384, "\uC124\uC815 \uAD8C\uD55C", `0${mode.toString(8)}`, `chmod 600 ${CONFIG_PATH2} \uB97C \uC2E4\uD589\uD558\uC138\uC694 (\uD1A0\uD070 \uBCF4\uD638)`);
         } catch {}
       }
-      check(host.isGateway, "\uC218\uC2E0(\uAC8C\uC774\uD2B8\uC6E8\uC774) \uC120\uC5B8", host.isGateway ? "\uC608" : "\uC544\uB2C8\uC694 \u2014 \uC774 \uC138\uC158\uC740 \uBC1C\uC2E0 \uC804\uC6A9", "\uD300 \uBA54\uC2DC\uC9C0\uB97C \uBC1B\uC73C\uB824\uBA74 claude \uB300\uC2E0 claude-team \uC73C\uB85C \uC138\uC158\uC744 \uCF1C\uC138\uC694 (\uC758\uB3C4\uB41C \uBC1C\uC2E0 \uC804\uC6A9 \uC138\uC158\uC774\uBA74 \uC815\uC0C1)");
+      check(host.isGateway, "\uD300 \uC138\uC158", host.isGateway ? "\uC608 (claude-team)" : "\uC544\uB2C8\uC694 \u2014 \uC774 \uC138\uC158\uC5D0\uC11C\uB294 team-relay \uB97C \uC4F8 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4", "\uD300 \uAE30\uB2A5\uC740 claude-team \uC73C\uB85C \uCF20 \uC138\uC158\uC5D0\uC11C\uB9CC \uC501\uB2C8\uB2E4 \u2014 \uADF8 \uC138\uC158\uC5D0\uC11C /team-relay:doctor \uB97C \uB2E4\uC2DC \uC2E4\uD589\uD558\uC138\uC694");
       check(true, "\uB7F0\uD0C0\uC784", `${host.runtime} \xB7 \uD50C\uB7EC\uADF8\uC778 v${PLUGIN_VERSION2} \xB7 \uD504\uB85C\uD1A0\uCF5C v${PROTO2}`);
       const pkgVersion = (() => {
         for (const dir of [PKG_DIR, dirname5(PKG_DIR.replace(/\/$/, ""))]) {
@@ -19371,6 +19365,9 @@ ${renderRooms(list)}`;
         check(false, "\uC0C1\uD0DC\uC904 \uACBD\uB85C", "\uBC84\uC804\uC774 \uBC15\uD78C \uC124\uCE58\uBCF8 \uACBD\uB85C", `\uD50C\uB7EC\uADF8\uC778\uC744 \uC5C5\uB370\uC774\uD2B8\uD558\uBA74 \uADF8 \uACBD\uB85C\uAC00 \uC0AC\uB77C\uC9D1\uB2C8\uB2E4. \uC544\uB798 **\uACE0\uC815 \uACBD\uB85C**\uB85C \uBC14\uAFB8\uC138\uC694:
      "command": "${STATUSLINE_CONFIG_PATH}"`);
       }
+      if (!host.isGateway)
+        return ok(lines.join(`
+`));
       check(!!protocolCache, "\uADDC\uC57D", protocolCache ? `rev ${protocolCache.rev} (\uCE90\uC2DC)` : "\uCE90\uC2DC \uC5C6\uC74C \u2014 \uB0B4\uC7A5 \uCD5C\uC18C \uD3F4\uBC31\uC73C\uB85C \uB3D9\uC791 \uC911", "\uC11C\uBC84 \uC811\uC18D \uD6C4 \uC138\uC158\uC744 \uC7AC\uC2DC\uC791\uD558\uBA74 \uC804\uCCB4 \uADDC\uC57D\uC774 \uC801\uC6A9\uB429\uB2C8\uB2E4");
       if (cfg) {
         if (!wsReady)

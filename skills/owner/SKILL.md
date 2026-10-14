@@ -10,7 +10,7 @@ description: 방장 전용 — 내가 방장인 방의 초대코드 발급·방 
 3. `notice <방> <내용>` → `team_owner(action:"notice", room, text)` — 배달/보관 집계와 만석으로 못 받은 팀원을 그대로 전한다.
 4. `memory <방>` → `team_memory(action:"view", room)` 로 지금 내용과 대기 중인 제안을 보여준다. 이어서 사용자가 원하는 대로:
    - 설명 → `team_memory(action:"describe", room, text)`
-   - 항목 추가·수정·삭제 → `add`(text, unknown) · `edit`(pos, text, unknown) · `remove`(pos)
+   - 항목 추가·수정·삭제 → `add`(text) · `edit`(pos, text) · `remove`(pos)
    - 제안 처리 → `approve`(proposal_id, 3칸이 다 찼으면 replace) · `reject`(proposal_id, reason)
-   메모리는 **설명 1 + 항목 최대 3, 칸마다 150자**다. 항목마다 "모르면 생기는 일"(unknown)이 있어야 하고, 채울 수 없다면 메모리감이 아니라고 알려준다. 넣을 기준은 "코드를 읽어서는 알 수 없고 답이 매번 같은 것" 이다.
+   메모리는 **설명 1 + 내용 최대 3, 칸마다 150자**다. 넣을 기준은 "코드를 읽어서는 알 수 없고 답이 매번 같은 것" 이다 — 이유가 필요하면 내용에 함께 쓴다(예: "금요일 배포 금지 — 주말 호출 방지").
 5. "방장이 아닙니다" 응답이면 서버 관리자에게 방장 지정을 요청하라고 안내한다.

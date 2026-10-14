@@ -75,14 +75,28 @@ function installStatusline(): void {
 const REQUEST_TIMEOUT_MS = Number(process.env.TEAM_RELAY_REQUEST_TIMEOUT_MS ?? 5000)
 
 
+/**
+ * 팀 세션인가 — claude-team(-yolo) 으로 켠 세션만 팀 기능을 쓴다 (0.10.0).
+ *
+ * 플러그인은 설치돼 있으면 **모든** Claude Code 세션에서 돈다. 예전엔 그냥 claude 로 켠 세션도
+ * 팀 도구를 쓰는 순간 서버에 붙어 "발신 전용" 으로 보냈는데, 답은 그 방을 받는 다른 세션으로
+ * 가서 보낸 세션은 답을 영영 못 받았다. 그 개념을 없앤다 — 일반 세션은 서버에 붙지 않고,
+ * 규약·메모리도 넣지 않고, 팀 도구는 안내만 한다(진단·위임 등록표는 이 컴퓨터 안의 일이라 쓴다).
+ */
+const IS_TEAM = process.env.TEAM_RELAY_GATEWAY === '1'
+const NOT_TEAM = '이 세션에서는 team-relay 를 쓸 수 없습니다 — claude-team 으로 실행했는지 확인해주세요'
+/** 일반 세션에서도 쓰는 도구 — 서버와 무관하게 이 컴퓨터 안에서 끝난다 */
+const LOCAL_TOOLS = new Set(['team_doctor', 'team_route'])
+
 // 기동 선접속 — 규약과 방 메모리를 **매번 새로** 받는다 (core/protocol.ts 머리말).
 // 못 받으면 저장본으로 시작한다. 기다림의 상한은 PROTOCOL_TIMEOUT_MS(기본 1.5초)다.
+// 일반 세션은 하지 않는다 — 팀 일을 안 하는 세션이 서버에 붙을 이유도, 규약을 들고 다닐 이유도 없다.
 let protocolCache = loadProtocolCache()
 let memoryCache = loadMemoryCache()
 let memoryFresh = false
 {
   const cfg0 = loadConfig()
-  const got = cfg0 ? await fetchWelcomeOnce(cfg0, PROTOCOL_TIMEOUT_MS) : null
+  const got = cfg0 && IS_TEAM ? await fetchWelcomeOnce(cfg0, PROTOCOL_TIMEOUT_MS) : null
   if (got?.protocol) {
     protocolCache = got.protocol
     try { saveProtocolCache(got.protocol) } catch { /* 캐시 실패는 기동을 막지 않는다 */ }
@@ -240,7 +254,10 @@ const mcp = new Server(
     },
     // 규약 전문은 서버(relay/protocol.md)가 배포한다 — 캐시/선접속으로 받아오고,
     // 못 받으면 보안 경계 조항만 담은 내장 폴백으로 기동한다 (thin client, v1 §2.4)
-    instructions: [protocolCache?.instructions ?? FALLBACK_INSTRUCTIONS, memorySection()].filter(Boolean).join('\n\n'),
+    // 일반 세션에는 한 줄만 — "팀 기능은 어디서 쓰나" 를 물으면 답할 수 있을 만큼
+    instructions: IS_TEAM
+      ? [protocolCache?.instructions ?? FALLBACK_INSTRUCTIONS, memorySection()].filter(Boolean).join('\n\n')
+      : 'team-relay: 이 세션은 팀 세션이 아니다 — 팀 기능(팀원에게 묻기·답장 등)은 claude-team 으로 켠 세션에서만 쓴다.',
   },
 )
 
@@ -576,7 +593,7 @@ function renderSent(res: RelayFrame, to: string): string {
 /** 서버가 보내는 방 메모리 모양 */
 interface MemoryDocWire {
   description: string
-  items: Array<{ text: string; unknown: string }>
+  items: Array<{ text: string }>
   rev: number
   updatedAt?: number
   updatedBy?: string
@@ -586,7 +603,7 @@ function renderMemoryDoc(room: string, m: MemoryDocWire): string {
   if (!m.description && !m.items.length) return `'${room}' 방 메모리: 비어 있습니다`
   const lines = [`'${room}' 방 메모리${m.updatedBy ? ` (마지막 수정 ${m.updatedBy})` : ''}`]
   if (m.description) lines.push(`설명  ${m.description}`)
-  m.items.forEach((it, i) => lines.push(`${i + 1}. ${it.text}  — 모르면: ${it.unknown}`))
+  m.items.forEach((it, i) => lines.push(`${i + 1}. ${it.text}`))
   if (m.items.length < 3) lines.push(`(항목 ${m.items.length}/3)`)
   return lines.join('\n')
 }
@@ -594,7 +611,6 @@ function renderMemoryDoc(room: string, m: MemoryDocWire): string {
 /** 메모리 거부 사유 — 무엇을 고치면 되는지 */
 function renderMemoryError(reason: string): string {
   if (reason.startsWith('memory_conflict')) return '그사이 다른 곳(관리자·다른 세션)에서 먼저 고쳤습니다 — view 로 최신 내용을 보고 다시 하세요'
-  if (reason.startsWith('memory_item_unknown_required')) return "'모르면'(unknown)이 필요합니다 — 채울 수 없다면 메모리에 넣을 내용이 아닙니다"
   if (reason.startsWith('memory_item_text_required')) return '항목 내용(text)이 필요합니다'
   if (reason.startsWith('memory_too_long')) return '칸마다 150자까지입니다 — 한 문장으로 줄이세요'
   if (reason === 'memory_too_many_items') return '항목은 3개까지입니다 — 하나를 remove 한 뒤 추가하세요'
@@ -759,7 +775,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'team_memory',
       description:
-        '방 메모리 — 방장·관리자가 방마다 정리한 짧은 사실(설명 + 항목 최대 3, 칸마다 150자)이다. 세션이 시작할 때 이미 시스템 프롬프트에 들어 있으니 따로 조회할 필요는 없다(view 는 지금 내용을 다시 볼 때). '
+        '방 메모리 — 방장·관리자가 방마다 정리한 짧은 사실(설명 1 + 내용 최대 3, 칸마다 150자)이다. 세션이 시작할 때 이미 시스템 프롬프트에 들어 있으니 따로 조회할 필요는 없다(view 는 지금 내용을 다시 볼 때). '
         + '사용자에게 물어서 얻은 답이 **코드를 읽어서는 알 수 없고 앞으로도 매번 같을 것 같으면** propose 로 제안한다 — 방장(없으면 관리자)이 승인하면 그 방 모든 세션에 들어간다. '
         + '방장이면 describe(설명)·add·edit·remove(항목)로 직접 고치고 approve·reject 로 제안을 처리한다.',
       inputSchema: {
@@ -767,8 +783,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {
           action: { type: 'string', enum: ['view', 'propose', 'describe', 'add', 'edit', 'remove', 'approve', 'reject'], description: '수행할 동작' },
           room: { type: 'string', description: '방 (생략하면 이 세션의 담당 방 — 담당이 여럿이면 필수)' },
-          text: { type: 'string', description: 'propose·add·edit: 항목 내용 (예: "금요일 배포 금지") · describe: 방 설명 (빈 문자열이면 지움)' },
-          unknown: { type: 'string', description: 'propose·add·edit: 모르면 생기는 일 (예: "주말에 사람이 호출된다") — 필수. 채울 수 없다면 메모리에 넣을 내용이 아니다' },
+          text: { type: 'string', description: 'propose·add·edit: 내용 한 문장 (예: "금요일 배포 금지 — 주말 호출 방지") · describe: 방 설명 (빈 문자열이면 지움)' },
           pos: { type: 'string', description: 'edit·remove: 항목 번호 (1~3)' },
           proposal_id: { type: 'string', description: 'approve·reject: 제안 id (mp-…)' },
           replace: { type: 'string', description: 'approve: 3칸이 다 찼을 때 이 제안으로 바꿀 항목 번호' },
@@ -838,6 +853,8 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
 
 mcp.setRequestHandler(CallToolRequestSchema, async req => {
   const args = (req.params.arguments ?? {}) as Record<string, string>
+  // 일반 세션 — 서버에 붙지 않는다. 진단·위임 등록표만 쓴다 (서버도 같은 규칙으로 막는다)
+  if (!IS_TEAM && !LOCAL_TOOLS.has(req.params.name)) return ok(`✗ ${NOT_TEAM}`)
   switch (req.params.name) {
     case 'team_join': {
       const url = normalizeUrl(args.address ?? '')
@@ -1042,7 +1059,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       const room = args.room ?? (heldRooms.length === 1 ? heldRooms[0] : '')
       if (!room) return ok(`✗ 어느 방인지 room 을 지정하세요 — 이 세션 담당: ${heldRooms.join(', ') || '(없음)'}`)
       if (action === 'propose') {
-        const res = await request({ type: 'memory_propose', room, text: args.text ?? '', unknown: args.unknown ?? '' })
+        const res = await request({ type: 'memory_propose', room, text: args.text ?? '' })
         if (res.type !== 'memory_proposed') return ok(`✗ ${renderMemoryError(String(res.reason ?? ''))}`)
         const where = res.to === 'owner' ? '방장에게 전달했습니다'
           : res.to === 'queued' ? '방장이 오프라인 — 접속하면 전달됩니다'
@@ -1054,9 +1071,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       if (got.type !== 'memory') return ok(`✗ ${renderMemoryError(String(got.reason ?? ''))}`)
       const cur = got.memory as MemoryDocWire
       if (action === 'view') {
-        const props = (got.proposals as Array<{ id: string; fromLabel: string; text: string; unknown: string }> | undefined) ?? []
+        const props = (got.proposals as Array<{ id: string; fromLabel: string; text: string }> | undefined) ?? []
         const tail = props.length
-          ? '\n\n대기 중인 제안:\n' + props.map(p => `  ${p.id} · ${p.fromLabel}: ${p.text} (모르면: ${p.unknown})`).join('\n')
+          ? '\n\n대기 중인 제안:\n' + props.map(p => `  ${p.id} · ${p.fromLabel}: ${p.text}`).join('\n')
           : ''
         return ok(renderMemoryDoc(room, cur) + tail)
       }
@@ -1067,10 +1084,10 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       const pos = Number(args.pos)
       const inRange = Number.isInteger(pos) && pos >= 1 && pos <= items.length
       if (action === 'describe') description = String(args.text ?? '')
-      else if (action === 'add') items.push({ text: String(args.text ?? ''), unknown: String(args.unknown ?? '') })
+      else if (action === 'add') items.push({ text: String(args.text ?? '') })
       else if (action === 'edit') {
         if (!inRange) return ok(`✗ pos 는 1~${items.length} 중 하나여야 합니다`)
-        items[pos - 1] = { text: String(args.text ?? items[pos - 1]!.text), unknown: String(args.unknown ?? items[pos - 1]!.unknown) }
+        items[pos - 1] = { text: String(args.text ?? items[pos - 1]!.text) }
       } else if (action === 'remove') {
         if (!inRange) return ok(`✗ pos 는 1~${items.length} 중 하나여야 합니다`)
         items.splice(pos - 1, 1)
@@ -1134,20 +1151,17 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         const selectable = list.filter(r => r.mark !== 'mine')
         if (selectable.length === 0) return ok(body)
 
-        const NONE = '__none__'
+        // "받지 않음" 항목은 없다 — 받지 않는 세션은 팀 기능을 못 쓰므로(0.10.0) 고를 이유가 없다.
+        // 바꾸고 싶지 않으면 창을 닫으면(취소) 된다.
         const picked = await host.choose({
           message: '이 세션이 받을 방을 고르세요',
           title: '담당할 방',
-          options: [
-            ...list.map(r => ({ value: r.room, label: choiceLabel(r) })),
-            { value: NONE, label: '받지 않음 (발신 전용으로 둡니다)' },
-          ],
+          options: list.map(r => ({ value: r.room, label: choiceLabel(r) })),
         })
         if (picked === null) {
           // 선택 UI 미지원이거나 사용자가 취소 — 목록은 그대로 보여주고 수동 경로를 안내한다
           return ok(`${body}\n\n→ /team-relay:room <방이름> 으로 지정하세요`)
         }
-        if (picked === NONE) return ok(`${body}\n\n담당을 변경하지 않았습니다 (이 세션은 발신 전용입니다)`)
         chosen = picked
       }
       const wanted = (chosen ?? args.rooms!).split(',').map(r => r.trim()).filter(Boolean)
@@ -1277,9 +1291,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       }
       check(
         host.isGateway,
-        '수신(게이트웨이) 선언',
-        host.isGateway ? '예' : '아니요 — 이 세션은 발신 전용',
-        '팀 메시지를 받으려면 claude 대신 claude-team 으로 세션을 켜세요 (의도된 발신 전용 세션이면 정상)',
+        '팀 세션',
+        host.isGateway ? '예 (claude-team)' : '아니요 — 이 세션에서는 team-relay 를 쓸 수 없습니다',
+        '팀 기능은 claude-team 으로 켠 세션에서만 씁니다 — 그 세션에서 /team-relay:doctor 를 다시 실행하세요',
       )
       check(true, '런타임', `${host.runtime} · 플러그인 v${PLUGIN_VERSION} · 프로토콜 v${PROTO}`)
       // 번들 배포본은 빌드 산출물이라, 리빌드를 빠뜨리면 소스와 조용히 어긋난다 (v0.7 §3.2 리스크)
@@ -1349,6 +1363,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         check(false, '상태줄 경로', '버전이 박힌 설치본 경로',
           `플러그인을 업데이트하면 그 경로가 사라집니다. 아래 **고정 경로**로 바꾸세요:\n     "command": "${STATUSLINE_CONFIG_PATH}"`)
       }
+      // 여기부터는 팀 세션의 일이다 — 일반 세션은 서버에 붙지 않으므로 이 컴퓨터 안의 점검으로 끝낸다
+      if (!host.isGateway) return ok(lines.join('\n'))
       check(
         !!protocolCache,
         '규약',
@@ -1462,7 +1478,7 @@ process.stdin.on('end', shutdown)
 process.stdin.on('close', shutdown)
 
 await mcp.connect(transport)
-// 게이트웨이로 선언된 세션만 자동 접속 — 일반 세션은 도구 호출 시 발신 전용으로만
+// 팀 세션(claude-team)만 접속한다 — 일반 세션은 서버에 붙지 않는다 (0.10.0)
 if (host.isGateway && loadConfig()) void connectWithConfig()
 
 /**

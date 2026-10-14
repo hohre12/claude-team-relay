@@ -83,7 +83,7 @@ export function memoryFromWelcome(f: RelayFrame, at = Date.now()): MemoryCache |
 }
 
 /**
- * 기동 선접속 — 발신 전용(gateway:false) 1회 접속으로 welcome 의 규약·방 메모리를 받아온다.
+ * 기동 선접속 — 방을 받지 않는(gateway:false) 1회 접속으로 welcome 의 규약·방 메모리를 받아온다.
  * 연결 상태 기계(재접속·세대)와 완전히 분리된 일회용 소켓 — 실패는 조용히 null.
  */
 export function fetchWelcomeOnce(cfg: Config, timeoutMs: number): Promise<{ protocol: ProtocolCache | null; memory: MemoryCache | null } | null> {

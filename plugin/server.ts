@@ -493,7 +493,7 @@ async function connectWithConfig(): Promise<RelayFrame | null> {
             applyWelcome(frame)
             lastError = null
             exportState()
-            if (Number(frame.v) > PROTO) log(`서버 프로토콜(v${frame.v})이 플러그인(v${PROTO})보다 새 버전 — /plugin update 권장`)
+            if (Number(frame.v) > PROTO) log(`서버 프로토콜(v${frame.v})이 플러그인(v${PROTO})보다 새 버전 — /plugin 의 Marketplaces 에서 업데이트 권장`)
             maybeUpdateProtocolCache(frame)
             log(`'${cfg.name}' 으로 접속 완료 (${cfg.url})`)
           } else {
@@ -1321,8 +1321,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
             ? '배포본이 소스보다 낡았습니다 — 관리자에게 알리세요 (bun run build 누락)'
             : '배포본은 최신인데 package.json 의 번호만 안 올라갔습니다 — 동작에는 지장이 없습니다. 관리자에게 알리세요')
       }
-      // /plugin update 는 디스크만 바꾼다. **이미 떠 있는 세션의 MCP 프로세스는 옛 코드를 계속
-      // 물고 돈다** — 설치본 폴더에 더 새 버전이 있으면 이 세션은 재시작이 필요하다는 뜻이다.
+      // 업데이트(Update marketplace)는 그 일을 한 세션에만 바로 적용된다. **이미 떠 있던 다른 세션은
+      // 옛 코드를 계속 물고 돈다** — 설치본 폴더에 더 새 버전이 있으면 이 세션에서 /reload-plugins 가 필요하다.
       const newerInstalled = ((): string | null => {
         try {
           const versionsDir = dirname(dirname(PLUGIN_DIR)) // …/team-relay/<버전>/plugin → …/team-relay
@@ -1339,7 +1339,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       })()
       if (newerInstalled) {
         check(false, '실행 중 버전', `v${PLUGIN_VERSION} (설치본은 v${newerInstalled})`,
-          '플러그인은 업데이트됐지만 이 세션은 옛 프로세스를 물고 있습니다 — Claude Code 를 완전히 종료한 뒤 다시 켜세요')
+          '이 세션은 업데이트 전 버전으로 돌고 있습니다 — /reload-plugins 를 실행하세요 (재시작은 필요 없습니다)')
       }
       // 상태줄은 플러그인이 죽어도 보이는 유일한 창구다 — 미설정을 조용히 두지 않는다 (v0.7 §3.3)
       const settingsRaw = ((): string | null => {

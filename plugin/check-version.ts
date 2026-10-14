@@ -26,4 +26,13 @@ if (uniq.length !== 1) {
   for (const [f, v] of Object.entries(all)) console.error(`    ${f.padEnd(28)} ${v}`)
   process.exit(1)
 }
-console.log(`✓ 버전 v${uniq[0]} — 세 곳 일치`)
+
+/* 업데이트 내역 — 버전을 올리면 CHANGELOG.md 에 그 버전 항목(`## 0.10.1 …`)이 있어야 한다.
+   0.10.0 까지는 기록이 커밋 메시지에만 있어서 팀원이 "뭐가 바뀌었지" 를 알 길이 없었다. */
+const v = uniq[0]!
+const changelog = ((): string => { try { return read('../CHANGELOG.md') } catch { return '' } })()
+if (!new RegExp(`^## ${v.replace(/\./g, '\\.')}\\b`, 'm').test(changelog)) {
+  console.error(`✗ CHANGELOG.md 에 v${v} 항목이 없습니다 — "## ${v} · <제목> — <날짜>" 로 업데이트 내역을 적으세요`)
+  process.exit(1)
+}
+console.log(`✓ 버전 v${v} — 세 곳 일치 · CHANGELOG 항목 있음`)

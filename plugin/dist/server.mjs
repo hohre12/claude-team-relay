@@ -17817,7 +17817,7 @@ var CONFIG_PATH = process.env.TEAM_RELAY_CONFIG ?? join(homedir(), ".claude", "c
 
 // core/version.ts
 var PROTO = 4;
-var PLUGIN_VERSION = "0.10.0";
+var PLUGIN_VERSION = "0.10.1";
 
 // core/ws.ts
 var WS = globalThis.WebSocket ?? (await Promise.resolve().then(() => (init_wrapper(), exports_wrapper))).default;
@@ -17913,7 +17913,7 @@ function fetchWelcomeOnce(cfg, timeoutMs) {
 
 // core/version.ts
 var PROTO2 = 4;
-var PLUGIN_VERSION2 = "0.10.0";
+var PLUGIN_VERSION2 = "0.10.1";
 
 // core/rooms.ts
 function classifyRooms(rooms, held, heldByOther) {
@@ -18477,7 +18477,7 @@ async function connectWithConfig() {
           lastError = null;
           exportState();
           if (Number(frame.v) > PROTO2)
-            log(`\uC11C\uBC84 \uD504\uB85C\uD1A0\uCF5C(v${frame.v})\uC774 \uD50C\uB7EC\uADF8\uC778(v${PROTO2})\uBCF4\uB2E4 \uC0C8 \uBC84\uC804 \u2014 /plugin update \uAD8C\uC7A5`);
+            log(`\uC11C\uBC84 \uD504\uB85C\uD1A0\uCF5C(v${frame.v})\uC774 \uD50C\uB7EC\uADF8\uC778(v${PROTO2})\uBCF4\uB2E4 \uC0C8 \uBC84\uC804 \u2014 /plugin \uC758 Marketplaces \uC5D0\uC11C \uC5C5\uB370\uC774\uD2B8 \uAD8C\uC7A5`);
           maybeUpdateProtocolCache(frame);
           log(`'${cfg.name}' \uC73C\uB85C \uC811\uC18D \uC644\uB8CC (${cfg.url})`);
         } else {
@@ -19347,7 +19347,7 @@ ${renderRooms(list)}`;
         }
       })();
       if (newerInstalled) {
-        check(false, "\uC2E4\uD589 \uC911 \uBC84\uC804", `v${PLUGIN_VERSION2} (\uC124\uCE58\uBCF8\uC740 v${newerInstalled})`, "\uD50C\uB7EC\uADF8\uC778\uC740 \uC5C5\uB370\uC774\uD2B8\uB410\uC9C0\uB9CC \uC774 \uC138\uC158\uC740 \uC61B \uD504\uB85C\uC138\uC2A4\uB97C \uBB3C\uACE0 \uC788\uC2B5\uB2C8\uB2E4 \u2014 Claude Code \uB97C \uC644\uC804\uD788 \uC885\uB8CC\uD55C \uB4A4 \uB2E4\uC2DC \uCF1C\uC138\uC694");
+        check(false, "\uC2E4\uD589 \uC911 \uBC84\uC804", `v${PLUGIN_VERSION2} (\uC124\uCE58\uBCF8\uC740 v${newerInstalled})`, "\uC774 \uC138\uC158\uC740 \uC5C5\uB370\uC774\uD2B8 \uC804 \uBC84\uC804\uC73C\uB85C \uB3CC\uACE0 \uC788\uC2B5\uB2C8\uB2E4 \u2014 /reload-plugins \uB97C \uC2E4\uD589\uD558\uC138\uC694 (\uC7AC\uC2DC\uC791\uC740 \uD544\uC694 \uC5C6\uC2B5\uB2C8\uB2E4)");
       }
       const settingsRaw = (() => {
         try {

@@ -90,7 +90,7 @@ GATEWAY=$(field gateway)
 ERR=$(field lastError)
 if [ -n "$ERR" ] && [ "$ERR" != "null" ]; then
   case "$ERR" in
-    plugin_outdated) printf '[team ✗ 구버전 — /plugin update]' ;;
+    plugin_outdated) printf '[team ✗ 구버전 — 업데이트 필요]' ;;
     revoked)         printf '[team ✗ 접속 차단됨]' ;;
     *)               printf '[team ✗ %s]' "$ERR" ;;
   esac

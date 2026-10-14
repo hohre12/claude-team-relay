@@ -84,7 +84,7 @@ alias claude-team-yolo='TEAM_RELAY_GATEWAY=1 claude --dangerously-skip-permissio
 | `[team ⚠️ 담당없음 · 빈방 1]` | 아무 방도 안 받는 중 → `/team-relay:room <방 이름>` |
 | `[team ✗ 연결없음]` | 중계 서버에 못 붙음 |
 | `[team ✗ 플러그인 미동작]` | 플러그인이 죽었거나 아예 못 뜸 → `/mcp` 재연결 또는 Claude Code 재시작. **팀 메시지는 멀쩡한데 이것만 뜬다면** 아래 「잘 안 될 때」를 보라 |
-| `[team ✗ 구버전 — /plugin update]` | 서버가 거절 중 |
+| `[team ✗ 구버전 — 업데이트 필요]` | 서버가 거절 중 → 아래 「업데이트」 |
 | `[team 🌙 퇴근]` | away 켜짐 |
 
 > 상태줄은 **세션마다 독립**이다. 한 머신에서 여러 세션이 각자 다른 방을 담당하면 각 창이 자기
@@ -268,6 +268,19 @@ DB 06시 초기화' 추가해줘"*, *"가영 제안 승인해줘"*. **칸마다 
 
 ---
 
+## 업데이트
+
+1. `/plugin` → **Marketplaces** → `jwbae-plugins` → **Update marketplace**
+   → `/plugin` 창을 닫으면 **지금 세션에는 바로 적용**된다 (Claude Code 가 `/reload-plugins` 를 대신 돌린다)
+2. 켜져 있던 **다른 세션**은 이전 버전으로 계속 돈다 — 각 세션에서 `/reload-plugins` 를 한 번. 재시작은 필요 없다
+3. 권장: 같은 화면에서 **Enable auto-update** 를 켜두면, Claude Code 를 켤 때마다 새 버전을 받아두고
+   *"Plugin updated: team-relay · Run /reload-plugins to apply"* 라고 알려준다
+
+무엇이 바뀌었는지는 [업데이트 내역(CHANGELOG)](../CHANGELOG.md) 에 있다. 터미널에서는
+`claude plugin update team-relay@jwbae-plugins` 로도 된다 (세션 안의 `/plugin update` 라는 명령은 없다).
+
+---
+
 ## 잘 안 될 때
 
 **먼저 `/team-relay:doctor`.** 설정·게이트웨이·연결·보관 큐를 자동 점검하고 ✗ 마다 처방을
@@ -280,8 +293,8 @@ DB 06시 초기화' 추가해줘"*, *"가영 제안 승인해줘"*. **칸마다 
 | 참가가 "연결할 수 없습니다" | 서버 주소가 맞는지, 사내망/VPN 에 연결돼 있는지 확인. 그래도 안 되면 관리자에게 문의 |
 | 참가가 "만료" / "이미 사용된 초대코드" | 코드는 1회용·72시간이다. 관리자에게 재발급 요청 |
 | 참가가 "이미 등록된 이름" | **그 방에** 같은 이름이 있다는 뜻이다. 관리자에게 다른 이름으로 발급 요청 |
-| 상대가 계속 오프라인으로 보임 | ① `/team-relay:status` 의 "수신(게이트웨이): 예" 확인 — 아니면 `claude-team` 으로 다시 켜기 ② 상대도 `claude-team` 으로 켰는지 ③ `/plugin update team-relay@jwbae-plugins` |
-| 접속 직후엔 되다가 오프라인 | `/plugin update` 후 재기동. 안 되면 관리자에게 문의 |
+| 상대가 계속 오프라인으로 보임 | ① `/team-relay:status` 의 "수신(게이트웨이): 예" 확인 — 아니면 `claude-team` 으로 다시 켜기 ② 상대도 `claude-team` 으로 켰는지 ③ 플러그인을 최신으로 (아래 「업데이트」) |
+| 접속 직후엔 되다가 오프라인 | 플러그인을 최신으로 (아래 「업데이트」). 안 되면 관리자에게 문의 |
 | 발신은 되는데 수신이 안 됨 | 그 방을 담당 중인지 본다(`/team-relay:status`). 다른 방을 담당 중이면 `/team-relay:room <그 방 이름>` — 보관분까지 배달된다 |
 | 머신을 바꿔서 토큰이 없음 | 관리자에게 **초대코드 재발급**을 요청한다. 소속 방·이름·보관 메시지가 전부 보존된다 |
-| **메시지는 잘 되는데 상태줄만 `✗ 플러그인 미동작`** | 옛 플러그인에서 `--resume` 으로 켠 세션에 생기던 오진이다. `/plugin update team-relay@jwbae-plugins` 후 **Claude Code 를 완전히 종료했다 다시 켠다**(`/plugin update` 만으로는 이미 떠 있는 플러그인이 안 바뀐다) |
+| **메시지는 잘 되는데 상태줄만 `✗ 플러그인 미동작`** | 옛 플러그인에서 `--resume` 으로 켠 세션에 생기던 오진이다. 플러그인을 최신으로 올리고(아래 「업데이트」) 그 세션에서 `/reload-plugins` |

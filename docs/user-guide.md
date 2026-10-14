@@ -135,8 +135,11 @@ alias claude-team-yolo='TEAM_RELAY_GATEWAY=1 claude --dangerously-skip-permissio
 | 위임 등록표 `/team-relay:route` | ✓ | ✓ | ✓ (이 컴퓨터의 설정 파일만 다룬다) |
 
 - **가운데 칸**은 `claude-team` 을 하나 더 켰는데 그 방을 이미 다른 세션이 받고 있는 경우다.
-  상태줄에 `[team ⚠️ 담당없음]` 이 뜬다. 이 세션으로 받으려면 `/team-relay:room <방>` —
-  그러면 원래 세션은 그 방을 놓는다.
+  상태줄에 `[team ⚠️ 담당없음]` 이 뜨고, 보내려고 하면 이렇게 나온다:
+  ```
+  이 세션은 받는 방이 없어 보낼 수 없습니다 — /team-relay:room 으로 방을 가져오세요
+  ```
+  이 세션으로 받으려면 `/team-relay:room <방>` — 그러면 원래 세션은 그 방을 놓는다.
 - 방을 여럿 받는다면 **받는 방에서만** 말할 수 있다. 받지 않는 방으로 보내면:
   ```
   'repoto-squad01' 방은 다른 세션이 받고 있어 이 세션에서는 보낼 수 없습니다
